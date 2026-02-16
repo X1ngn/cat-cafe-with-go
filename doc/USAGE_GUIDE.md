@@ -30,19 +30,19 @@ redis-server --daemonize yes
 
 ```bash
 # 终端 1
-./cat-cafe --mode agent --agent 花花
+./bin/cat-cafe --mode agent --agent 花花
 
 # 终端 2
-./cat-cafe --mode agent --agent 薇薇
+./bin/cat-cafe --mode agent --agent 薇薇
 
 # 终端 3
-./cat-cafe --mode agent --agent 小乔
+./bin/cat-cafe --mode agent --agent 小乔
 ```
 
 ### 5. 使用交互式界面（推荐）
 
 ```bash
-./cat-cafe --mode ui
+./bin/cat-cafe --mode ui
 ```
 
 在交互界面中:
@@ -79,7 +79,7 @@ redis-server --daemonize yes
 
 **启动 UI:**
 ```bash
-./cat-cafe --mode ui
+./bin/cat-cafe --mode ui
 ```
 
 **发送任务:**
@@ -98,13 +98,63 @@ redis-server --daemonize yes
 
 **列出 Agent:**
 ```bash
-./cat-cafe --list
+./bin/cat-cafe --list
 ```
 
 **发送任务:**
 ```bash
-./cat-cafe --send --to 花花 --task "实现HTTP服务器"
+./bin/cat-cafe --send --to 花花 --task "实现HTTP服务器"
 ```
+
+### 方式三：API 模式（推荐用于前端集成）
+
+提供 RESTful API 接口，支持 Web 前端和其他客户端接入。
+
+**启动 API 服务器:**
+```bash
+./bin/cat-cafe --mode api --port 8080
+```
+
+或使用便捷脚本（会自动启动所有服务）：
+```bash
+./start.sh
+```
+
+**API 特性:**
+- ✅ 会话管理：创建、查询、删除会话
+- ✅ 消息管理：发送消息、获取历史消息
+- ✅ Agent 管理：查询可用的猫猫 Agent
+- ✅ 实时回复：Agent 处理完成后自动将回复添加到会话
+- ✅ 调用历史：追踪每个会话中调用了哪些 Agent
+
+**基本使用流程:**
+
+1. **创建会话**
+```bash
+curl -X POST http://localhost:8080/api/sessions
+```
+
+2. **发送消息并提及猫猫**
+```bash
+curl -X POST http://localhost:8080/api/sessions/sess_xxx/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "@花花 你好，请帮我设计一个系统",
+    "mentionedCats": ["cat_001"]
+  }'
+```
+
+3. **获取消息列表（包含 Agent 回复）**
+```bash
+curl http://localhost:8080/api/sessions/sess_xxx/messages
+```
+
+**消息类型:**
+- `user`: 用户发送的消息
+- `agent`: Agent（猫猫）的回复
+- `system`: 系统消息（如"花花已加入对话"）
+
+**详细 API 文档:** 参见 `frontend/docs/API.md`
 
 ---
 
@@ -230,7 +280,7 @@ redis:
 ### 列出所有 Agent
 
 ```bash
-./cat-cafe --list
+./bin/cat-cafe --list
 ```
 
 输出:
@@ -239,19 +289,19 @@ redis:
 
   花花 (claude)
     管道: pipe_huahua
-    执行命令: ./minimal-claude
+    执行命令: ./bin/minimal-claude
     系统提示词: prompts/calico_cat.md
     状态: idle
 
   薇薇 (codex)
     管道: pipe_weiwei
-    执行命令: ./minimal-codex
+    执行命令: ./bin/minimal-codex
     系统提示词: prompts/lihua_cat.md
     状态: idle
 
   小乔 (gemini)
     管道: pipe_xiaoqiao
-    执行命令: ./minimal-gemini
+    执行命令: ./bin/minimal-gemini
     系统提示词: prompts/silver_cat.md
     状态: idle
 ```
@@ -260,13 +310,13 @@ redis:
 
 ```bash
 # 发送任务给花花
-./cat-cafe --send --to 花花 --task "实现一个 HTTP 服务器"
+./bin/cat-cafe --send --to 花花 --task "实现一个 HTTP 服务器"
 
 # 发送任务给薇薇
-./cat-cafe --send --to 薇薇 --task "审查 server.go 的安全性"
+./bin/cat-cafe --send --to 薇薇 --task "审查 server.go 的安全性"
 
 # 发送任务给小乔
-./cat-cafe --send --to 小乔 --task "设计登录页面"
+./bin/cat-cafe --send --to 小乔 --task "设计登录页面"
 ```
 
 ### 启动 Agent Worker
@@ -275,13 +325,13 @@ redis:
 
 ```bash
 # 终端 1: 启动花花
-./cat-cafe --mode agent --agent 花花
+./bin/cat-cafe --mode agent --agent 花花
 
 # 终端 2: 启动薇薇
-./cat-cafe --mode agent --agent 薇薇
+./bin/cat-cafe --mode agent --agent 薇薇
 
 # 终端 3: 启动小乔
-./cat-cafe --mode agent --agent 小乔
+./bin/cat-cafe --mode agent --agent 小乔
 ```
 
 ---
@@ -294,19 +344,19 @@ redis:
 
 ```bash
 # 终端 1
-./cat-cafe --mode agent --agent 花花
+./bin/cat-cafe --mode agent --agent 花花
 
 # 终端 2
-./cat-cafe --mode agent --agent 薇薇
+./bin/cat-cafe --mode agent --agent 薇薇
 
 # 终端 3
-./cat-cafe --mode agent --agent 小乔
+./bin/cat-cafe --mode agent --agent 小乔
 ```
 
 2. **发送任务给花花进行架构设计**
 
 ```bash
-./cat-cafe --send --to 花花 --task "设计一个用户认证系统"
+./bin/cat-cafe --send --to 花花 --task "设计一个用户认证系统"
 ```
 
 花花会:
@@ -318,7 +368,7 @@ redis:
 3. **发送任务给薇薇进行代码审查**
 
 ```bash
-./cat-cafe --send --to 薇薇 --task "审查花花设计的用户认证系统"
+./bin/cat-cafe --send --to 薇薇 --task "审查花花设计的用户认证系统"
 ```
 
 薇薇会:
@@ -330,7 +380,7 @@ redis:
 4. **发送任务给小乔进行 UI 设计**
 
 ```bash
-./cat-cafe --send --to 小乔 --task "设计用户认证系统的登录界面"
+./bin/cat-cafe --send --to 小乔 --task "设计用户认证系统的登录界面"
 ```
 
 小乔会:

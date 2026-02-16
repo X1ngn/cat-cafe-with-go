@@ -10,7 +10,7 @@ import (
 const (
 	DEFAULT_ALLOWED_TOOLS   = "Read,Edit,Glob,Grep"
 	DEFAULT_PERMISSION_MODE = "acceptEdits"
-	DEFAULT_MODEL           = "sonnet"
+	DEFAULT_MODEL           = ""
 )
 
 func main() {

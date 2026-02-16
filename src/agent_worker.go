@@ -80,11 +80,10 @@ func (w *AgentWorker) createConsumerGroup() error {
 
 // Start 启动 Agent 工作进程
 func (w *AgentWorker) Start() error {
-	fmt.Printf("🐱 Agent %s 启动 (管道: %s)\n", w.config.Name, w.config.Pipe)
-	fmt.Printf("   监听: %s\n", w.streamKey)
-	fmt.Printf("   消费者组: %s\n", w.consumerGroup)
-	fmt.Printf("   消费者: %s\n", w.consumerName)
-	fmt.Println()
+	LogInfo("[Agent-%s] 启动 (管道: %s)", w.config.Name, w.config.Pipe)
+	LogInfo("[Agent-%s] 监听: %s", w.config.Name, w.streamKey)
+	LogInfo("[Agent-%s] 消费者组: %s", w.config.Name, w.consumerGroup)
+	LogInfo("[Agent-%s] 消费者: %s", w.config.Name, w.consumerName)
 
 	// 处理信号
 	sigChan := make(chan os.Signal, 1)
@@ -92,7 +91,7 @@ func (w *AgentWorker) Start() error {
 
 	go func() {
 		<-sigChan
-		fmt.Printf("\n🛑 Agent %s 收到停止信号\n", w.config.Name)
+		LogInfo("[Agent-%s] 收到停止信号", w.config.Name)
 		w.cancel()
 	}()
 
@@ -100,11 +99,11 @@ func (w *AgentWorker) Start() error {
 	for {
 		select {
 		case <-w.ctx.Done():
-			fmt.Printf("✓ Agent %s 已停止\n", w.config.Name)
+			LogInfo("[Agent-%s] 已停止", w.config.Name)
 			return nil
 		default:
 			if err := w.processMessages(); err != nil {
-				fmt.Fprintf(os.Stderr, "处理消息失败: %v\n", err)
+				LogError("[Agent-%s] 处理消息失败: %v", w.config.Name, err)
 				time.Sleep(1 * time.Second)
 			}
 		}
@@ -148,18 +147,22 @@ func (w *AgentWorker) processMessages() error {
 
 // handleMessage 处理单条消息
 func (w *AgentWorker) handleMessage(message redis.XMessage) error {
+	LogDebug("[Agent-%s] 收到 Redis 消息: %s", w.config.Name, message.ID)
+
 	taskData, ok := message.Values["task"].(string)
 	if !ok {
+		LogError("[Agent-%s] 无效的任务数据", w.config.Name)
 		return fmt.Errorf("无效的任务数据")
 	}
 
 	var task TaskMessage
 	if err := json.Unmarshal([]byte(taskData), &task); err != nil {
+		LogError("[Agent-%s] 解析任务失败: %v", w.config.Name, err)
 		return fmt.Errorf("解析任务失败: %w", err)
 	}
 
-	fmt.Printf("📥 Agent %s 收到任务: %s\n", w.config.Name, task.TaskID)
-	fmt.Printf("   内容: %s\n", task.Content)
+	LogInfo("[Agent-%s] 📥 收到任务: %s", w.config.Name, task.TaskID)
+	LogInfo("[Agent-%s] 任务内容: %s", w.config.Name, task.Content)
 
 	// 更新状态为 processing
 	task.Status = "processing"
@@ -171,18 +174,22 @@ func (w *AgentWorker) handleMessage(message redis.XMessage) error {
 
 	if err != nil {
 		task.Status = "failed"
-		fmt.Fprintf(os.Stderr, "❌ 任务执行失败: %v (耗时: %v)\n", err, duration)
+		LogError("[Agent-%s] ❌ 任务执行失败: %v (耗时: %v)", w.config.Name, err, duration)
 		return err
 	}
 
 	task.Status = "completed"
-	fmt.Printf("✓ 任务完成: %s (耗时: %v)\n", task.TaskID, duration)
-	fmt.Printf("   结果: %s\n", result)
-	fmt.Println()
+	LogInfo("[Agent-%s] ✓ 任务完成: %s (耗时: %v)", w.config.Name, task.TaskID, duration)
+	LogDebug("[Agent-%s] 任务结果: %s", w.config.Name, result)
+
+	// 将结果发送回结果队列
+	if err := w.sendResult(&task, result); err != nil {
+		LogError("[Agent-%s] 发送结果失败: %v", w.config.Name, err)
+	}
 
 	// 解析输出中的 @标记，触发后续任务
 	if err := w.parseAndDispatchTasks(result); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  解析后续任务失败: %v\n", err)
+		LogWarn("[Agent-%s] 解析后续任务失败: %v", w.config.Name, err)
 	}
 
 	return nil
@@ -190,17 +197,58 @@ func (w *AgentWorker) handleMessage(message redis.XMessage) error {
 
 // executeTask 执行任务
 func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
+	LogDebug("[Agent-%s] 开始执行任务: %s", w.config.Name, task.TaskID)
+	LogDebug("[Agent-%s] 执行命令: %s", w.config.Name, w.config.ExecCmd)
+
 	// 组合系统提示词和用户内容
-	fullPrompt := fmt.Sprintf("%s\n\n---\n\n用户需求：\n%s", w.systemPrompt, task.Content)
+	fullPrompt := fmt.Sprintf("%s\n\n========================================\n\n用户需求：\n%s", w.systemPrompt, task.Content)
 
 	// 执行命令
-	cmd := exec.CommandContext(w.ctx, w.config.ExecCmd, "-p", fullPrompt)
+	// 执行命令，prompt 作为位置参数传递
+	cmd := exec.CommandContext(w.ctx, w.config.ExecCmd, fullPrompt)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		LogError("[Agent-%s] 执行命令失败: %v, 输出: %s", w.config.Name, err, string(output))
 		return "", fmt.Errorf("执行命令失败: %w, 输出: %s", err, string(output))
 	}
 
+	LogDebug("[Agent-%s] 命令执行成功，输出长度: %d", w.config.Name, len(output))
 	return string(output), nil
+}
+
+// sendResult 将任务结果发送到结果队列
+func (w *AgentWorker) sendResult(task *TaskMessage, result string) error {
+	// 如果没有 SessionID，不发送结果
+	if task.SessionID == "" {
+		LogDebug("[Agent-%s] 任务没有 SessionID，跳过发送结果", w.config.Name)
+		return nil
+	}
+
+	// 更新任务结果
+	task.Result = result
+	task.Status = "completed"
+
+	// 序列化任务
+	taskJSON, err := json.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("序列化任务失败: %w", err)
+	}
+
+	// 发送到结果队列
+	resultStreamKey := "results:stream"
+	_, err = w.redisClient.XAdd(w.ctx, &redis.XAddArgs{
+		Stream: resultStreamKey,
+		Values: map[string]interface{}{
+			"task": string(taskJSON),
+		},
+	}).Result()
+
+	if err != nil {
+		return fmt.Errorf("发送结果到 Redis 失败: %w", err)
+	}
+
+	LogInfo("[Agent-%s] ✓ 结果已发送到队列: %s", w.config.Name, resultStreamKey)
+	return nil
 }
 
 // parseAndDispatchTasks 解析输出中的 @标记并分发任务
