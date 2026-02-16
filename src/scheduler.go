@@ -51,14 +51,23 @@ type AgentState struct {
 	UpdatedAt  time.Time
 }
 
+// ChatRecord 聊天记录
+type ChatRecord struct {
+	Timestamp time.Time `json:"timestamp"`
+	From      string    `json:"from"`
+	To        string    `json:"to"`
+	Content   string    `json:"content"`
+}
+
 // Scheduler 调度器
 type Scheduler struct {
-	config       *Config
-	redisClient  *redis.Client
-	ctx          context.Context
-	agents       map[string]*AgentConfig
-	agentStates  map[string]*AgentState
+	config        *Config
+	redisClient   *redis.Client
+	ctx           context.Context
+	agents        map[string]*AgentConfig
+	agentStates   map[string]*AgentState
 	systemPrompts map[string]string
+	chatLogFile   string
 }
 
 // NewScheduler 创建新的调度器
@@ -95,6 +104,7 @@ func NewScheduler(configPath string) (*Scheduler, error) {
 		agents:        make(map[string]*AgentConfig),
 		agentStates:   make(map[string]*AgentState),
 		systemPrompts: make(map[string]string),
+		chatLogFile:   "chat_history.jsonl",
 	}
 
 	// 注册所有 Agent
@@ -132,10 +142,18 @@ func (s *Scheduler) registerAgents() error {
 
 // SendTask 发送任务到指定 Agent
 func (s *Scheduler) SendTask(agentName, content string) (string, error) {
+	return s.SendTaskFrom("铲屎官", agentName, content)
+}
+
+// SendTaskFrom 从指定发送者发送任务到指定 Agent
+func (s *Scheduler) SendTaskFrom(from, agentName, content string) (string, error) {
 	agent, exists := s.agents[agentName]
 	if !exists {
 		return "", fmt.Errorf("Agent %s 不存在", agentName)
 	}
+
+	// 记录聊天
+	s.logChat(from, agentName, content)
 
 	// 生成任务 ID
 	taskID := fmt.Sprintf("task_%s_%d", agentName, time.Now().UnixNano())
@@ -218,4 +236,24 @@ func (s *Scheduler) GetSystemPrompt(agentName string) (string, error) {
 // Close 关闭调度器
 func (s *Scheduler) Close() error {
 	return s.redisClient.Close()
+}
+
+// logChat 记录聊天到文件
+func (s *Scheduler) logChat(from, to, content string) {
+	record := ChatRecord{
+		Timestamp: time.Now(),
+		From:      from,
+		To:        to,
+		Content:   content,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(s.chatLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(string(data) + "\n")
 }
