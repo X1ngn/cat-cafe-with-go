@@ -1,17 +1,17 @@
 agents:
   - name: "花花"
     pipe: "pipe_huahua"
-    exec_cmd: "./minimal-claude"
+    exec_cmd: "/Users/jesuswang/Documents/Project/cat_coffee/bin/minimal-claude"
     system_prompt_path: "prompts/calico_cat.md"
 
   - name: "薇薇"
     pipe: "pipe_weiwei"
-    exec_cmd: "./minimal-codex"
+    exec_cmd: "/Users/jesuswang/Documents/Project/cat_coffee/bin/minimal-codex"
     system_prompt_path: "prompts/lihua_cat.md"
 
   - name: "小乔"
     pipe: "pipe_xiaoqiao"
-    exec_cmd: "./minimal-gemini"
+    exec_cmd: "/Users/jesuswang/Documents/Project/cat_coffee/bin/minimal-gemini"
     system_prompt_path: "prompts/silver_cat.md"
 
 redis:

@@ -37,6 +37,8 @@ type TaskMessage struct {
 	TaskID      string    `json:"task_id"`
 	AgentName   string    `json:"agent_name"`
 	Content     string    `json:"content"`
+	Result      string    `json:"result,omitempty"`      // Agent 执行结果
+	SessionID   string    `json:"session_id,omitempty"`  // 关联的会话 ID
 	RetryCount  int       `json:"retry_count"`
 	MaxRetries  int       `json:"max_retries"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -141,28 +143,35 @@ func (s *Scheduler) registerAgents() error {
 }
 
 // SendTask 发送任务到指定 Agent
-func (s *Scheduler) SendTask(agentName, content string) (string, error) {
-	return s.SendTaskFrom("铲屎官", agentName, content)
+func (s *Scheduler) SendTask(agentName, content, sessionID string) (string, error) {
+	return s.SendTaskFrom("铲屎官", agentName, content, sessionID)
 }
 
 // SendTaskFrom 从指定发送者发送任务到指定 Agent
-func (s *Scheduler) SendTaskFrom(from, agentName, content string) (string, error) {
+func (s *Scheduler) SendTaskFrom(from, agentName, content, sessionID string) (string, error) {
+	LogDebug("[Scheduler] 准备发送任务 - From: %s, To: %s, Content: %s, SessionID: %s", from, agentName, content, sessionID)
+
 	agent, exists := s.agents[agentName]
 	if !exists {
+		LogError("[Scheduler] Agent 不存在: %s, 可用的 Agents: %v", agentName, s.getAgentNames())
 		return "", fmt.Errorf("Agent %s 不存在", agentName)
 	}
+
+	LogDebug("[Scheduler] 找到 Agent: %s, Pipe: %s", agentName, agent.Pipe)
 
 	// 记录聊天
 	s.logChat(from, agentName, content)
 
 	// 生成任务 ID
 	taskID := fmt.Sprintf("task_%s_%d", agentName, time.Now().UnixNano())
+	LogDebug("[Scheduler] 生成任务 ID: %s", taskID)
 
 	// 创建任务消息
 	task := TaskMessage{
 		TaskID:     taskID,
 		AgentName:  agentName,
 		Content:    content,
+		SessionID:  sessionID,
 		RetryCount: 0,
 		MaxRetries: 3,
 		CreatedAt:  time.Now(),
@@ -172,11 +181,13 @@ func (s *Scheduler) SendTaskFrom(from, agentName, content string) (string, error
 	// 序列化任务
 	taskData, err := json.Marshal(task)
 	if err != nil {
+		LogError("[Scheduler] 序列化任务失败: %v", err)
 		return "", fmt.Errorf("序列化任务失败: %w", err)
 	}
 
 	// 发送到 Redis Stream
 	streamKey := fmt.Sprintf("pipe:%s", agent.Pipe)
+	LogInfo("[Scheduler] 发送任务到 Redis Stream: %s", streamKey)
 	_, err = s.redisClient.XAdd(s.ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		Values: map[string]interface{}{
@@ -185,11 +196,21 @@ func (s *Scheduler) SendTaskFrom(from, agentName, content string) (string, error
 	}).Result()
 
 	if err != nil {
+		LogError("[Scheduler] 发送任务到 Redis Stream 失败: %v", err)
 		return "", fmt.Errorf("发送任务到 Redis Stream 失败: %w", err)
 	}
 
-	fmt.Printf("✓ 任务已发送: %s -> %s (管道: %s)\n", taskID, agentName, agent.Pipe)
+	LogInfo("[Scheduler] ✓ 任务已发送: %s -> %s (管道: %s)", taskID, agentName, agent.Pipe)
 	return taskID, nil
+}
+
+// getAgentNames 获取所有 Agent 名称（用于调试）
+func (s *Scheduler) getAgentNames() []string {
+	names := make([]string, 0, len(s.agents))
+	for name := range s.agents {
+		names = append(names, name)
+	}
+	return names
 }
 
 // GetAgentState 获取 Agent 状态

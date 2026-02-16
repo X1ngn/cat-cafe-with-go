@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-bg-cream;
+  }
+}
+
+@layer components {
+  .message-bubble {
+    @apply rounded-2xl px-4 py-3;
+  }
+
+  .cat-message {
+    @apply message-bubble bg-gray-100 text-black;
+  }
+
+  .user-message {
+    @apply message-bubble bg-user-green text-black;
+  }
+
+  .system-message {
+    @apply bg-gray-200 text-gray-600 text-xs px-4 py-1 rounded-full;
+  }
+
+  .session-card {
+    @apply bg-white border border-gray-200 rounded-lg p-4 cursor-pointer hover:shadow-md transition-shadow;
+  }
+
+  .session-card-active {
+    @apply session-card bg-indigo-50 border-indigo-300;
+  }
+
+  .status-badge {
+    @apply text-xs font-medium px-3 py-1 rounded-xl;
+  }
+
+  .status-idle {
+    @apply status-badge bg-status-idle text-green-700;
+  }
+
+  .status-busy {
+    @apply status-badge bg-status-busy text-orange-700;
+  }
+}

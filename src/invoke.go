@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 )
 
 // AgentOptions 包含所有可能的代理CLI配置选项
@@ -31,18 +30,15 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	var sessionID string
 
 	// 根据 CLI 名称构建不同的参数
-	args = append(args, "-p", prompt, "--output-format", "stream-json")
-
-	if options.Model != "" {
-		args = append(args, "--model", options.Model)
-	}
-	if options.SessionID != "" {
-		args = append(args, "--resume", options.SessionID)
-	}
-
 	switch cliName {
 	case "claude":
-		args = append(args, "--verbose") // Claude CLI 需要 --verbose 和 stream-json 一起用
+		args = append(args, "-p", prompt, "--output-format", "stream-json", "--verbose")
+		if options.Model != "" {
+			args = append(args, "--model", options.Model)
+		}
+		if options.SessionID != "" {
+			args = append(args, "--resume", options.SessionID)
+		}
 		if options.AllowedTools != "" {
 			args = append(args, "--allowedTools", options.AllowedTools)
 		}
@@ -50,6 +46,13 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 			args = append(args, "--permission-mode", options.PermissionMode)
 		}
 	case "gemini":
+		args = append(args, "-p", prompt, "--output-format", "stream-json")
+		if options.Model != "" {
+			args = append(args, "--model", options.Model)
+		}
+		if options.SessionID != "" {
+			args = append(args, "--resume", options.SessionID)
+		}
 		if options.AllowedTools != "" {
 			args = append(args, "--allowed-tools", options.AllowedTools)
 		}
@@ -57,21 +60,33 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 			args = append(args, "--approval-mode", options.ApprovalMode)
 		}
 	case "codex":
-		// Codex 使用不同的命令格式
+		// Codex 使用不同的命令格式，通过 stdin 传递 prompt 避免参数解析问题
 		if options.SessionID != "" {
-			args = []string{"exec", "resume", options.SessionID, "--json", "--skip-git-repo-check"}
+			args = []string{"exec", "resume", "--json", "--skip-git-repo-check", options.SessionID, "-"}
 		} else {
 			args = []string{"exec", "--json", "--full-auto", "--skip-git-repo-check"}
 			if options.Model != "" {
 				args = append(args, "--model", options.Model)
 			}
+			args = append(args, "-")
 		}
-		args = append(args, prompt)
 	default:
 		return "", "", fmt.Errorf("不支持的 CLI 工具: %s", cliName)
 	}
 
 	cmd := exec.Command(cliName, args...)
+
+	// 对于 codex，通过 stdin 传递 prompt
+	if cliName == "codex" {
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return "", "", fmt.Errorf("无法获取 stdin: %w", err)
+		}
+		go func() {
+			defer stdin.Close()
+			stdin.Write([]byte(prompt))
+		}()
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -86,12 +101,17 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// 收集 stderr 输出
+	var stderrOutput strings.Builder
+
 	// 处理 stderr
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
-			// 静默处理 stderr，不打印
+			line := scanner.Text()
+			stderrOutput.WriteString(line)
+			stderrOutput.WriteString("\n")
 		}
 	}()
 
@@ -177,14 +197,11 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	wg.Wait() // 等待所有 goroutine 完成
 
 	if err := cmd.Wait(); err != nil {
-		return assistantResponse, sessionID, fmt.Errorf("命令 %s 执行失败: %w", cliName, err)
-	}
-
-	fmt.Println() // 打印一个新行，美化输出
-	if sessionID != "" {
-		fmt.Printf("✓ 完成 (session: %s, 时间: %s)\n", sessionID, time.Now().Format("15:04:05"))
-	} else {
-		fmt.Printf("✓ 完成 (时间: %s)\n", time.Now().Format("15:04:05"))
+		errMsg := fmt.Sprintf("命令 %s 执行失败: %v", cliName, err)
+		if stderrOutput.Len() > 0 {
+			errMsg += fmt.Sprintf("\nstderr: %s", stderrOutput.String())
+		}
+		return assistantResponse, sessionID, fmt.Errorf("%s", errMsg)
 	}
 
 	return assistantResponse, sessionID, nil

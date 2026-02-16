@@ -18,17 +18,35 @@ func main() {
 		sessionIDFlag = flag.String("resume", "", "恢复会话 ID")
 	)
 
-	flag.Parse()
+	// 手动解析参数，只解析标志，不解析 prompt 内容
+	args := os.Args[1:]
+	var prompt string
+
+	// 找到第一个非标志参数（prompt）
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-model" || args[i] == "--model" {
+			if i+1 < len(args) {
+				*model = args[i+1]
+				i++ // 跳过值
+			}
+		} else if args[i] == "-resume" || args[i] == "--resume" {
+			if i+1 < len(args) {
+				*sessionIDFlag = args[i+1]
+				i++ // 跳过值
+			}
+		} else {
+			// 第一个非标志参数就是 prompt
+			prompt = args[i]
+			break
+		}
+	}
 
 	// 检查是否提供了 prompt
-	if flag.NArg() < 1 {
+	if prompt == "" {
 		fmt.Fprintf(os.Stderr, "用法: %s [选项] \"你的问题\"\n", os.Args[0])
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
-
-	// 获取用户输入的问题
-	prompt := flag.Arg(0)
 
 	// 配置选项
 	options := AgentOptions{
@@ -39,10 +57,11 @@ func main() {
 	if *sessionIDFlag == "" {
 		loadedSessionID, err := LoadSessionID("codex")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "加载 Codex 会话失败: %v\n", err)
-			os.Exit(1)
+			// 如果加载失败，使用空的 SessionID（开始新会话）
+			options.SessionID = ""
+		} else {
+			options.SessionID = loadedSessionID
 		}
-		options.SessionID = loadedSessionID
 	} else {
 		options.SessionID = *sessionIDFlag
 	}
