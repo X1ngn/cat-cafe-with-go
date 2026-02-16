@@ -24,6 +24,7 @@ type AgentWorker struct {
 	streamKey     string
 	consumerGroup string
 	consumerName  string
+	chatLogFile   string
 }
 
 // NewAgentWorker 创建 Agent 工作进程
@@ -55,6 +56,7 @@ func NewAgentWorker(config *AgentConfig, systemPrompt string, redisAddr, redisPa
 		streamKey:     streamKey,
 		consumerGroup: consumerGroup,
 		consumerName:  consumerName,
+		chatLogFile:   "chat_history.jsonl",
 	}
 
 	// 创建消费者组
@@ -240,6 +242,9 @@ func (w *AgentWorker) parseAndDispatchTasks(output string) error {
 			continue
 		}
 
+		// 记录聊天
+		w.logChat(w.config.Name, targetAgent, taskContent)
+
 		fmt.Printf("🔄 %s 调用 %s\n", w.config.Name, targetAgent)
 		fmt.Printf("   任务: %s\n", taskContent)
 	}
@@ -388,4 +393,24 @@ func (w *AgentWorker) retryMessage(message redis.XMessage) {
 func (w *AgentWorker) Stop() {
 	w.cancel()
 	w.redisClient.Close()
+}
+
+// logChat 记录聊天到文件
+func (w *AgentWorker) logChat(from, to, content string) {
+	record := ChatRecord{
+		Timestamp: time.Now(),
+		From:      from,
+		To:        to,
+		Content:   content,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(w.chatLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(string(data) + "\n")
 }
