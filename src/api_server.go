@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v2"
 )
 
 // SessionManager 管理所有会话
@@ -35,6 +36,7 @@ type SessionContext struct {
 	Scheduler     *Scheduler
 	Messages      []Message
 	CallHistory   []CallHistoryItem
+	JoinedCats    map[string]bool // 记录已加入的猫猫，避免重复显示系统消息
 	mu            sync.RWMutex
 }
 
@@ -154,6 +156,7 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 		Scheduler:    scheduler,
 		Messages:     make([]Message, 0),
 		CallHistory:  make([]CallHistoryItem, 0),
+		JoinedCats:   make(map[string]bool), // 初始化已加入猫猫的映射
 	}
 
 	sm.sessions[sessionID] = ctx
@@ -273,7 +276,7 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 		Sender: &Sender{
 			ID:     "user_001",
 			Name:   "用户",
-			Avatar: "",
+			Avatar: sm.config.User.Avatar,
 		},
 		Timestamp: time.Now(),
 		SessionID: sessionID,
@@ -301,16 +304,21 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 
 			LogInfo("[API] 处理猫猫提及 - ID: %s, Name: %s", catID, catName)
 
-			// 添加系统消息
-			systemMsg := Message{
-				ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
-				Type:      "system",
-				Content:   fmt.Sprintf("%s 已加入对话", catName),
-				Timestamp: time.Now(),
-				SessionID: sessionID,
+			// 只在猫猫第一次加入时添加系统消息
+			if !ctx.JoinedCats[catID] {
+				systemMsg := Message{
+					ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
+					Type:      "system",
+					Content:   fmt.Sprintf("%s 已加入对话", catName),
+					Timestamp: time.Now(),
+					SessionID: sessionID,
+				}
+				ctx.Messages = append(ctx.Messages, systemMsg)
+				ctx.JoinedCats[catID] = true // 标记该猫猫已加入
+				LogDebug("[API] 已添加系统消息: %s", systemMsg.ID)
+			} else {
+				LogDebug("[API] 猫猫 %s 已在会话中，跳过系统消息", catName)
 			}
-			ctx.Messages = append(ctx.Messages, systemMsg)
-			LogDebug("[API] 已添加系统消息: %s", systemMsg.ID)
 
 			// 记录调用历史
 			ctx.CallHistory = append(ctx.CallHistory, CallHistoryItem{
@@ -391,29 +399,39 @@ func (sm *SessionManager) GetCallHistory(sessionID string) ([]CallHistoryItem, e
 
 // GetCats 获取所有猫猫
 func (sm *SessionManager) GetCats() []Cat {
-	cats := []Cat{
-		{
-			ID:     "cat_001",
-			Name:   "花花",
-			Avatar: "",
-			Color:  "#ff9966",
-			Status: "idle",
-		},
-		{
-			ID:     "cat_002",
-			Name:   "薇薇",
-			Avatar: "",
-			Color:  "#d9bf99",
-			Status: "idle",
-		},
-		{
-			ID:     "cat_003",
-			Name:   "小乔",
-			Avatar: "",
-			Color:  "#cccccc",
-			Status: "idle",
-		},
+	// 从配置文件构建猫猫列表
+	cats := make([]Cat, 0, len(sm.config.Agents))
+
+	LogDebug("[API] 配置中的 Agent 数量: %d", len(sm.config.Agents))
+
+	catIDMap := map[string]string{
+		"花花": "cat_001",
+		"薇薇": "cat_002",
+		"小乔": "cat_003",
 	}
+
+	catColorMap := map[string]string{
+		"花花": "#ff9966",
+		"薇薇": "#d9bf99",
+		"小乔": "#cccccc",
+	}
+
+	for _, agent := range sm.config.Agents {
+		catID := catIDMap[agent.Name]
+		color := catColorMap[agent.Name]
+
+		LogDebug("[API] 添加猫猫: %s, Avatar: %s", agent.Name, agent.Avatar)
+
+		cats = append(cats, Cat{
+			ID:     catID,
+			Name:   agent.Name,
+			Avatar: agent.Avatar,
+			Color:  color,
+			Status: "idle",
+		})
+	}
+
+	LogDebug("[API] 返回猫猫列表，数量: %d", len(cats))
 
 	return cats
 }
@@ -551,6 +569,9 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 		c.Next()
 	})
 
+	// 静态文件服务 - 提供头像图片
+	r.Static("/images", "./images")
+
 	api := r.Group("/api")
 	{
 		// 会话管理
@@ -578,8 +599,18 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 
 // loadConfig 加载配置（简化版）
 func loadConfig(path string) (*Config, error) {
-	// 这里复用现有的配置加载逻辑
-	return &Config{}, nil
+	// 读取配置文件
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+
+	var config Config
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("解析配置文件失败: %w", err)
+	}
+
+	return &config, nil
 }
 
 // listenForResults 监听 Agent 返回的结果
@@ -665,10 +696,7 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 		Content:   task.Result,
 		Timestamp: time.Now(),
 		SessionID: task.SessionID,
-		Sender: &Sender{
-			ID:   getCatIDByName(task.AgentName),
-			Name: task.AgentName,
-		},
+		Sender:    sm.getCatInfoByName(task.AgentName),
 	}
 
 	ctx.Messages = append(ctx.Messages, agentMsg)
@@ -691,4 +719,35 @@ func getCatIDByName(name string) string {
 		return id
 	}
 	return "cat_unknown"
+}
+
+// getCatInfoByName 根据猫猫名字获取完整信息
+func (sm *SessionManager) getCatInfoByName(name string) *Sender {
+	catIDMap := map[string]string{
+		"花花": "cat_001",
+		"薇薇": "cat_002",
+		"小乔": "cat_003",
+	}
+
+	catColorMap := map[string]string{
+		"花花": "#ff9966",
+		"薇薇": "#d9bf99",
+		"小乔": "#cccccc",
+	}
+
+	// 从配置中查找头像
+	avatar := ""
+	for _, agent := range sm.config.Agents {
+		if agent.Name == name {
+			avatar = agent.Avatar
+			break
+		}
+	}
+
+	return &Sender{
+		ID:     catIDMap[name],
+		Name:   name,
+		Avatar: avatar,
+		Color:  catColorMap[name],
+	}
 }
