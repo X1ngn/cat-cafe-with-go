@@ -46,7 +46,7 @@ export const MentionMenu: React.FC<MentionMenuProps> = ({ onSelect }) => {
           className="flex items-center justify-between px-4 py-3 hover:bg-gray-50 cursor-pointer"
         >
           <div className="flex items-center gap-3">
-            <Avatar color={cat.color} size="sm" className="rounded-2xl" />
+            <Avatar color={cat.color} size="sm" className="rounded-2xl" avatar={cat.avatar} />
             <span className="font-medium">{cat.name}</span>
           </div>
           <StatusBadge status={cat.status} />

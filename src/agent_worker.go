@@ -188,7 +188,7 @@ func (w *AgentWorker) handleMessage(message redis.XMessage) error {
 	}
 
 	// 解析输出中的 @标记，触发后续任务
-	if err := w.parseAndDispatchTasks(result); err != nil {
+	if err := w.parseAndDispatchTasks(result, &task); err != nil {
 		LogWarn("[Agent-%s] 解析后续任务失败: %v", w.config.Name, err)
 	}
 
@@ -252,7 +252,7 @@ func (w *AgentWorker) sendResult(task *TaskMessage, result string) error {
 }
 
 // parseAndDispatchTasks 解析输出中的 @标记并分发任务
-func (w *AgentWorker) parseAndDispatchTasks(output string) error {
+func (w *AgentWorker) parseAndDispatchTasks(output string, currentTask *TaskMessage) error {
 	lines := strings.Split(output, "\n")
 
 	for _, line := range lines {
@@ -284,8 +284,8 @@ func (w *AgentWorker) parseAndDispatchTasks(output string) error {
 			continue
 		}
 
-		// 发送任务到其他 Agent
-		if err := w.sendTaskToAgent(targetAgent, taskContent); err != nil {
+		// 发送任务到其他 Agent，传递 SessionID
+		if err := w.sendTaskToAgent(targetAgent, taskContent, currentTask.SessionID); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️  发送任务到 %s 失败: %v\n", targetAgent, err)
 			continue
 		}
@@ -301,19 +301,19 @@ func (w *AgentWorker) parseAndDispatchTasks(output string) error {
 }
 
 // sendTaskToAgent 发送任务到指定 Agent
-func (w *AgentWorker) sendTaskToAgent(agentName, taskContent string) error {
+func (w *AgentWorker) sendTaskToAgent(agentName, taskContent, sessionID string) error {
 	// 查询 Agent 配置
 	configKey := "config:agents"
 	agentsData, err := w.redisClient.Get(w.ctx, configKey).Result()
 	if err != nil {
 		// 如果 Redis 中没有配置，尝试从本地加载
-		return w.sendTaskByPipeName(agentName, taskContent)
+		return w.sendTaskByPipeName(agentName, taskContent, sessionID)
 	}
 
 	// 解析配置
 	var agents []AgentConfig
 	if err := json.Unmarshal([]byte(agentsData), &agents); err != nil {
-		return w.sendTaskByPipeName(agentName, taskContent)
+		return w.sendTaskByPipeName(agentName, taskContent, sessionID)
 	}
 
 	// 查找目标 Agent
@@ -332,7 +332,9 @@ func (w *AgentWorker) sendTaskToAgent(agentName, taskContent string) error {
 	// 创建任务
 	task := TaskMessage{
 		TaskID:     generateTaskID(),
+		AgentName:  agentName,
 		Content:    taskContent,
+		SessionID:  sessionID,
 		Status:     "pending",
 		CreatedAt:  time.Now(),
 		RetryCount: 0,
@@ -357,7 +359,7 @@ func (w *AgentWorker) sendTaskToAgent(agentName, taskContent string) error {
 }
 
 // sendTaskByPipeName 通过管道名发送任务（备用方法）
-func (w *AgentWorker) sendTaskByPipeName(agentName, taskContent string) error {
+func (w *AgentWorker) sendTaskByPipeName(agentName, taskContent, sessionID string) error {
 	// 简单映射：Agent名 -> 管道名
 	pipeMap := map[string]string{
 		"花花": "pipe_huahua",
@@ -373,7 +375,9 @@ func (w *AgentWorker) sendTaskByPipeName(agentName, taskContent string) error {
 	// 创建任务
 	task := TaskMessage{
 		TaskID:     generateTaskID(),
+		AgentName:  agentName,
 		Content:    taskContent,
+		SessionID:  sessionID,
 		Status:     "pending",
 		CreatedAt:  time.Now(),
 		RetryCount: 0,
