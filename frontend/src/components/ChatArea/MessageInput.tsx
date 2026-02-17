@@ -23,12 +23,22 @@ export const MessageInput: React.FC = () => {
 
     // 检测 @ 符号
     const lastAtIndex = value.lastIndexOf('@');
+    const cursorPosition = e.target.selectionStart || 0;
+
+    // 如果光标不在 @ 后面，关闭菜单
+    if (lastAtIndex === -1 || cursorPosition <= lastAtIndex) {
+      setShowMentionMenu(false);
+      return;
+    }
+
+    // 如果刚输入 @，显示菜单
     if (lastAtIndex !== -1 && lastAtIndex === value.length - 1) {
       setShowMentionMenu(true);
       setMentionQuery('');
     } else if (lastAtIndex !== -1 && showMentionMenu) {
-      const query = value.slice(lastAtIndex + 1);
-      if (query.includes(' ')) {
+      const query = value.slice(lastAtIndex + 1, cursorPosition);
+      // 如果查询中包含空格或光标移开了 @ 区域，关闭菜单
+      if (query.includes(' ') || cursorPosition < lastAtIndex) {
         setShowMentionMenu(false);
       } else {
         setMentionQuery(query);
@@ -60,6 +70,25 @@ export const MessageInput: React.FC = () => {
     }
   };
 
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // 监听方向键和其他导航键，检查光标位置
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+      const target = e.target as HTMLInputElement;
+      const cursorPosition = target.selectionStart || 0;
+      const lastAtIndex = inputValue.lastIndexOf('@');
+
+      // 如果光标移开了 @ 区域，关闭菜单
+      if (lastAtIndex === -1 || cursorPosition <= lastAtIndex) {
+        setShowMentionMenu(false);
+      }
+    }
+
+    // ESC 键关闭菜单
+    if (e.key === 'Escape') {
+      setShowMentionMenu(false);
+    }
+  };
+
   const handleSelectCat = (catId: string, catName: string) => {
     setMentionedCats([...mentionedCats, catId]);
     const lastAtIndex = inputValue.lastIndexOf('@');
@@ -80,6 +109,7 @@ export const MessageInput: React.FC = () => {
           value={inputValue}
           onChange={handleInputChange}
           onKeyPress={handleKeyPress}
+          onKeyUp={handleKeyUp}
           placeholder="跟猫猫们说点什么... (@呼叫猫猫)"
           className="flex-1 outline-none text-base"
         />
