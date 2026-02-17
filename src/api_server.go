@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,6 +89,8 @@ type CallHistoryItem struct {
 	CatName   string    `json:"catName"`
 	SessionID string    `json:"sessionId"`
 	Timestamp time.Time `json:"timestamp"`
+	Prompt    string    `json:"prompt"`    // 调用时的提示词
+	Response  string    `json:"response"`  // 猫猫的回复
 }
 
 // SendMessageRequest 发送消息请求
@@ -326,6 +329,8 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 				CatName:   catName,
 				SessionID: sessionID,
 				Timestamp: time.Now(),
+				Prompt:    req.Content,
+				Response:  "", // 回复稍后在 handleResult 中更新
 			})
 			LogDebug("[API] 已记录调用历史 - Cat: %s", catName)
 
@@ -705,7 +710,84 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 
 	LogInfo("[API] ✓ Agent 消息已添加 - MessageID: %s, Agent: %s", agentMsg.ID, task.AgentName)
 
+	// 更新调用历史中的 Response
+	sm.updateCallHistoryResponse(ctx, task.AgentName, task.Result)
+
+	// 解析回复中的 @ 调用，记录到调用历史
+	sm.parseAndRecordCalls(ctx, task.Result, task.SessionID)
+
 	return nil
+}
+
+// updateCallHistoryResponse 更新调用历史中的 Response
+func (sm *SessionManager) updateCallHistoryResponse(ctx *SessionContext, catName string, response string) {
+	// 从后往前查找最近一次该猫猫的调用记录（Response 为空的）
+	for i := len(ctx.CallHistory) - 1; i >= 0; i-- {
+		if ctx.CallHistory[i].CatName == catName && ctx.CallHistory[i].Response == "" {
+			ctx.CallHistory[i].Response = response
+			LogDebug("[API] 已更新调用历史 Response - Cat: %s", catName)
+			break
+		}
+	}
+}
+
+// parseAndRecordCalls 解析回复中的 @ 调用并记录到调用历史
+func (sm *SessionManager) parseAndRecordCalls(ctx *SessionContext, content string, sessionID string) {
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// 检查是否包含 @标记
+		if !strings.HasPrefix(line, "@") {
+			continue
+		}
+
+		// 解析格式: @Agent 任务内容
+		parts := strings.SplitN(line, " ", 2)
+		if len(parts) < 2 {
+			continue
+		}
+
+		targetAgent := strings.TrimPrefix(parts[0], "@")
+		taskContent := strings.TrimSpace(parts[1])
+
+		// 跳过 @铲屎官
+		if targetAgent == "铲屎官" {
+			continue
+		}
+
+		// 获取猫猫 ID
+		catID := getCatIDByName(targetAgent)
+		if catID == "cat_unknown" {
+			continue
+		}
+
+		// 只在猫猫第一次被调用时添加系统消息
+		if !ctx.JoinedCats[catID] {
+			systemMsg := Message{
+				ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
+				Type:      "system",
+				Content:   fmt.Sprintf("%s 已加入对话", targetAgent),
+				Timestamp: time.Now(),
+				SessionID: sessionID,
+			}
+			ctx.Messages = append(ctx.Messages, systemMsg)
+			ctx.JoinedCats[catID] = true
+			LogDebug("[API] 猫猫互相调用 - 已添加系统消息: %s", systemMsg.ID)
+		}
+
+		// 记录调用历史
+		ctx.CallHistory = append(ctx.CallHistory, CallHistoryItem{
+			CatID:     catID,
+			CatName:   targetAgent,
+			SessionID: sessionID,
+			Timestamp: time.Now(),
+			Prompt:    taskContent,
+			Response:  "", // 回复稍后更新
+		})
+		LogDebug("[API] 猫猫互相调用 - 已记录调用历史: %s", targetAgent)
+	}
 }
 
 // getCatIDByName 根据猫猫名字获取 ID
