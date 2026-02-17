@@ -3,19 +3,19 @@ agents:
     pipe: "pipe_huahua"
     exec_cmd: "/Users/jesuswang/Documents/Project/cat_coffee/bin/minimal-claude"
     system_prompt_path: "prompts/calico_cat.md"
-    avatar: "/images/calico_cat.png"
+    avatar: "/images/sanhua.png"
 
   - name: "薇薇"
     pipe: "pipe_weiwei"
     exec_cmd: "/Users/jesuswang/Documents/Project/cat_coffee/bin/minimal-codex"
     system_prompt_path: "prompts/lihua_cat.md"
-    avatar: "/images/lihua_cat.png"
+    avatar: "/images/weiwei.png"
 
   - name: "小乔"
     pipe: "pipe_xiaoqiao"
     exec_cmd: "/Users/jesuswang/Documents/Project/cat_coffee/bin/minimal-gemini"
     system_prompt_path: "prompts/silver_cat.md"
-    avatar: "/images/silver_cat.png"
+    avatar: "/images/xiaoqiao.png"
 
 redis:
   addr: "localhost:6379"
@@ -23,4 +23,4 @@ redis:
   db: 0
 
 user:
-  avatar: "/images/user.png"
+  avatar: "/images/owner.png"
