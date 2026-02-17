@@ -12,6 +12,7 @@ export const MessageInput: React.FC = () => {
     showMentionMenu,
     setShowMentionMenu,
     setMentionQuery,
+    setWaitingForReply,
   } = useAppStore();
 
   const [mentionedCats, setMentionedCats] = useState<string[]>([]);
@@ -58,6 +59,9 @@ export const MessageInput: React.FC = () => {
       addMessage(response.data);
       setInputValue('');
       setMentionedCats([]);
+
+      // 发送消息后，设置等待回复状态，触发快速轮询
+      setWaitingForReply(true);
     } catch (error) {
       console.error('Failed to send message:', error);
     }
