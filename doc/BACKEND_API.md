@@ -206,6 +206,66 @@
 ]
 ```
 
+### 5. 模式管理
+
+#### GET /api/modes
+获取所有可用的协作模式
+
+**响应**:
+```json
+[
+  {
+    "name": "free_discussion",
+    "description": "自由讨论模式 - 猫猫们可以自由互相调用"
+  }
+]
+```
+
+#### GET /api/sessions/:sessionId/mode
+获取会话当前使用的协作模式
+
+**响应**:
+```json
+{
+  "mode": "free_discussion",
+  "description": "自由讨论模式 - 猫猫们可以自由互相调用",
+  "config": {
+    "name": "free_discussion",
+    "enabled": true
+  },
+  "state": {
+    "custom_state": {},
+    "last_update_time": "2024-02-17T10:00:00Z"
+  }
+}
+```
+
+#### PUT /api/sessions/:sessionId/mode
+切换会话的协作模式
+
+**请求体**:
+```json
+{
+  "mode": "free_discussion",
+  "modeConfig": {
+    "option1": "value1"
+  }
+}
+```
+
+**响应**:
+```json
+{
+  "mode": "free_discussion",
+  "description": "自由讨论模式 - 猫猫们可以自由互相调用"
+}
+```
+
+**功能**:
+- 切换会话的协作模式
+- 初始化新模式
+- 添加系统消息通知用户
+
 ## 数据结构
 
 ### SessionContext
@@ -220,6 +280,10 @@ type SessionContext struct {
     Scheduler     *Scheduler          // 独立的调度器实例
     Messages      []Message           // 消息列表
     CallHistory   []CallHistoryItem   // 调用历史
+    JoinedCats    map[string]bool     // 已加入的猫猫
+    Mode          CollaborationMode   // 当前协作模式
+    ModeConfig    *ModeConfig         // 模式配置
+    ModeState     *ModeState          // 模式状态
     mu            sync.RWMutex        // 读写锁
 }
 ```
@@ -227,9 +291,23 @@ type SessionContext struct {
 ### SessionManager
 ```go
 type SessionManager struct {
-    sessions map[string]*SessionContext  // 所有会话
-    mu       sync.RWMutex                // 读写锁
-    config   *Config                     // 配置
+    sessions     map[string]*SessionContext  // 所有会话
+    mu           sync.RWMutex                // 读写锁
+    config       *Config                     // 配置
+    redisClient  *redis.Client               // Redis 客户端
+    orchestrator *Orchestrator               // 编排器
+}
+```
+
+### CollaborationMode (协作模式接口)
+```go
+type CollaborationMode interface {
+    GetName() string
+    GetDescription() string
+    OnUserMessage(sessionID string, content string, mentionedCats []string) ([]AgentCall, error)
+    OnAgentResponse(sessionID string, agentName string, response string) ([]AgentCall, error)
+    Validate() error
+    Initialize(sessionID string) error
 }
 ```
 

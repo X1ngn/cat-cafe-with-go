@@ -17,12 +17,19 @@ type AgentConfig struct {
 	Pipe             string `yaml:"pipe"`
 	ExecCmd          string `yaml:"exec_cmd"`
 	SystemPromptPath string `yaml:"system_prompt_path"`
+	Avatar           string `yaml:"avatar"`
 }
 
 // Config 系统配置
 type Config struct {
 	Agents []AgentConfig `yaml:"agents"`
 	Redis  RedisConfig   `yaml:"redis"`
+	User   UserConfig    `yaml:"user"`
+}
+
+// UserConfig 用户配置
+type UserConfig struct {
+	Avatar string `yaml:"avatar"`
 }
 
 // RedisConfig Redis 配置
@@ -34,15 +41,17 @@ type RedisConfig struct {
 
 // TaskMessage 任务消息结构
 type TaskMessage struct {
-	TaskID      string    `json:"task_id"`
-	AgentName   string    `json:"agent_name"`
-	Content     string    `json:"content"`
-	Result      string    `json:"result,omitempty"`      // Agent 执行结果
-	SessionID   string    `json:"session_id,omitempty"`  // 关联的会话 ID
-	RetryCount  int       `json:"retry_count"`
-	MaxRetries  int       `json:"max_retries"`
-	CreatedAt   time.Time `json:"created_at"`
-	Status      string    `json:"status"` // pending, processing, completed, failed
+	TaskID      string                 `json:"task_id"`
+	AgentName   string                 `json:"agent_name"`
+	Content     string                 `json:"content"`
+	Result      string                 `json:"result,omitempty"`     // Agent 执行结果
+	SessionID   string                 `json:"session_id,omitempty"` // 关联的会话 ID
+	RetryCount  int                    `json:"retry_count"`
+	MaxRetries  int                    `json:"max_retries"`
+	CreatedAt   time.Time              `json:"created_at"`
+	Status      string                 `json:"status"` // pending, processing, completed, failed
+	Timestamp   time.Time              `json:"timestamp"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // AgentState Agent 状态
