@@ -33,4 +33,6 @@ export interface CallHistory {
   catName: string;
   sessionId: string;
   timestamp: Date;
+  prompt: string;
+  response: string;
 }
