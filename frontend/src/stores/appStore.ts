@@ -29,6 +29,10 @@ interface AppState {
   setShowMentionMenu: (show: boolean) => void;
   mentionQuery: string;
   setMentionQuery: (query: string) => void;
+
+  // 等待回复状态
+  waitingForReply: boolean;
+  setWaitingForReply: (waiting: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -53,4 +57,7 @@ export const useAppStore = create<AppState>((set) => ({
   setShowMentionMenu: (show) => set({ showMentionMenu: show }),
   mentionQuery: '',
   setMentionQuery: (query) => set({ mentionQuery: query }),
+
+  waitingForReply: false,
+  setWaitingForReply: (waiting) => set({ waitingForReply: waiting }),
 }));
