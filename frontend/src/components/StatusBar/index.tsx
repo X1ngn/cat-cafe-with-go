@@ -44,7 +44,14 @@ export const StatusBar: React.FC = () => {
     if (!currentSession) return;
     try {
       const response = await historyAPI.getCallHistory(currentSession.id);
-      setHistory(response.data);
+      // 去重：只保留每只猫猫的第一次调用记录
+      const uniqueHistory = response.data.reduce((acc: CallHistory[], item: CallHistory) => {
+        if (!acc.find(h => h.catId === item.catId)) {
+          acc.push(item);
+        }
+        return acc;
+      }, []);
+      setHistory(uniqueHistory);
     } catch (error) {
       console.error('Failed to load history:', error);
     }
@@ -59,7 +66,7 @@ export const StatusBar: React.FC = () => {
           {cats.map((cat) => (
             <div key={cat.id} className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <Avatar color={cat.color} size="sm" className="rounded-2xl" />
+                <Avatar color={cat.color} size="sm" className="rounded-2xl" avatar={cat.avatar} />
                 <span className="font-medium">{cat.name}</span>
               </div>
               <StatusBadge status={cat.status} />
