@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -18,12 +17,13 @@ import (
 
 // SessionManager 管理所有会话
 type SessionManager struct {
-	sessions    map[string]*SessionContext
-	mu          sync.RWMutex
-	config      *Config
-	redisClient *redis.Client
-	ctx         context.Context
-	cancel      context.CancelFunc
+	sessions     map[string]*SessionContext
+	mu           sync.RWMutex
+	config       *Config
+	redisClient  *redis.Client
+	ctx          context.Context
+	cancel       context.CancelFunc
+	orchestrator *Orchestrator // 新增：编排器
 }
 
 // SessionContext 会话上下文，每个会话有独立的调度器
@@ -38,6 +38,9 @@ type SessionContext struct {
 	Messages      []Message
 	CallHistory   []CallHistoryItem
 	JoinedCats    map[string]bool // 记录已加入的猫猫，避免重复显示系统消息
+	Mode          CollaborationMode // 新增：当前协作模式
+	ModeConfig    *ModeConfig       // 新增：模式配置
+	ModeState     *ModeState        // 新增：模式状态
 	mu            sync.RWMutex
 }
 
@@ -99,6 +102,12 @@ type SendMessageRequest struct {
 	MentionedCats []string `json:"mentionedCats"`
 }
 
+// SwitchModeRequest 切换模式请求
+type SwitchModeRequest struct {
+	Mode       string                 `json:"mode"`
+	ModeConfig map[string]interface{} `json:"modeConfig,omitempty"`
+}
+
 // NewSessionManager 创建会话管理器
 func NewSessionManager(configPath string) (*SessionManager, error) {
 	// 读取配置
@@ -122,12 +131,25 @@ func NewSessionManager(configPath string) (*SessionManager, error) {
 		return nil, fmt.Errorf("Redis 连接失败: %w", err)
 	}
 
+	// 创建一个临时调度器用于编排器（编排器需要调度器来发送任务）
+	// 注意：每个会话仍然有自己的调度器
+	tempScheduler, err := NewScheduler(configPath)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("创建调度器失败: %w", err)
+	}
+
+	// 创建编排器，默认使用自由讨论模式
+	orchestrator := NewOrchestrator(tempScheduler, "free_discussion")
+	orchestrator.SetAgentConfigs(config.Agents)
+
 	sm := &SessionManager{
-		sessions:    make(map[string]*SessionContext),
-		config:      config,
-		redisClient: rdb,
-		ctx:         ctx,
-		cancel:      cancel,
+		sessions:     make(map[string]*SessionContext),
+		config:       config,
+		redisClient:  rdb,
+		ctx:          ctx,
+		cancel:       cancel,
+		orchestrator: orchestrator,
 	}
 
 	// 启动结果监听器
@@ -149,6 +171,18 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 		return nil, fmt.Errorf("创建调度器失败: %w", err)
 	}
 
+	// 创建默认模式配置
+	modeConfig := &ModeConfig{
+		Name:    "free_discussion",
+		Enabled: true,
+	}
+
+	// 从编排器获取模式实例
+	mode, err := sm.orchestrator.registry.GetOrCreate("free_discussion", modeConfig)
+	if err != nil {
+		return nil, fmt.Errorf("创建协作模式失败: %w", err)
+	}
+
 	ctx := &SessionContext{
 		ID:           sessionID,
 		Name:         "新对话",
@@ -160,15 +194,27 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 		Messages:     make([]Message, 0),
 		CallHistory:  make([]CallHistoryItem, 0),
 		JoinedCats:   make(map[string]bool), // 初始化已加入猫猫的映射
+		Mode:         mode,
+		ModeConfig:   modeConfig,
+		ModeState: &ModeState{
+			CustomState:    make(map[string]interface{}),
+			LastUpdateTime: time.Now(),
+		},
 	}
 
 	sm.sessions[sessionID] = ctx
+
+	// 在编排器中注册会话
+	if err := sm.orchestrator.CreateSession(sessionID, "free_discussion", modeConfig); err != nil {
+		delete(sm.sessions, sessionID)
+		return nil, fmt.Errorf("在编排器中注册会话失败: %w", err)
+	}
 
 	// 添加系统欢迎消息
 	welcomeMsg := Message{
 		ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
 		Type:      "system",
-		Content:   "会话已创建，猫猫们已就位！",
+		Content:   fmt.Sprintf("会话已创建，当前模式：%s", mode.GetDescription()),
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 	}
@@ -233,6 +279,10 @@ func (sm *SessionManager) DeleteSession(sessionID string) error {
 
 	// 关闭调度器
 	ctx.Scheduler.Close()
+
+	// 从编排器中删除会话
+	sm.orchestrator.DeleteSession(sessionID)
+
 	delete(sm.sessions, sessionID)
 
 	return nil
@@ -289,61 +339,72 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 	ctx.UpdatedAt = time.Now()
 	LogDebug("[API] 已添加用户消息: %s", userMsg.ID)
 
-	// 如果有提及的猫猫，发送任务
+	// 如果有提及的猫猫，通过编排器处理
 	if len(req.MentionedCats) > 0 {
-		// 创建 ID 到名字的映射
+		// 将猫猫 ID 转换为名称
 		catIDToName := map[string]string{
 			"cat_001": "花花",
 			"cat_002": "薇薇",
 			"cat_003": "小乔",
 		}
 
+		mentionedNames := make([]string, 0, len(req.MentionedCats))
 		for _, catID := range req.MentionedCats {
-			catName, ok := catIDToName[catID]
-			if !ok {
-				LogWarn("[API] 未知的猫猫 ID: %s", catID)
-				continue
+			if name, ok := catIDToName[catID]; ok {
+				mentionedNames = append(mentionedNames, name)
 			}
+		}
 
-			LogInfo("[API] 处理猫猫提及 - ID: %s, Name: %s", catID, catName)
+		// 通过编排器处理用户消息
+		calls, err := sm.orchestrator.HandleUserMessage(sessionID, req.Content, mentionedNames)
+		if err != nil {
+			LogError("[API] 编排器处理用户消息失败: %v", err)
+			return nil, fmt.Errorf("处理消息失败: %w", err)
+		}
+
+		LogInfo("[API] 编排器返回 %d 个猫猫调用", len(calls))
+
+		// 处理每个调用
+		for _, call := range calls {
+			catID := getCatIDByName(call.AgentName)
 
 			// 只在猫猫第一次加入时添加系统消息
 			if !ctx.JoinedCats[catID] {
 				systemMsg := Message{
 					ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
 					Type:      "system",
-					Content:   fmt.Sprintf("%s 已加入对话", catName),
+					Content:   fmt.Sprintf("%s 已加入对话", call.AgentName),
 					Timestamp: time.Now(),
 					SessionID: sessionID,
 				}
 				ctx.Messages = append(ctx.Messages, systemMsg)
-				ctx.JoinedCats[catID] = true // 标记该猫猫已加入
+				ctx.JoinedCats[catID] = true
 				LogDebug("[API] 已添加系统消息: %s", systemMsg.ID)
 			} else {
-				LogDebug("[API] 猫猫 %s 已在会话中，跳过系统消息", catName)
+				LogDebug("[API] 猫猫 %s 已在会话中，跳过系统消息", call.AgentName)
 			}
 
 			// 记录调用历史
 			ctx.CallHistory = append(ctx.CallHistory, CallHistoryItem{
 				CatID:     catID,
-				CatName:   catName,
+				CatName:   call.AgentName,
 				SessionID: sessionID,
 				Timestamp: time.Now(),
-				Prompt:    req.Content,
+				Prompt:    call.Prompt,
 				Response:  "", // 回复稍后在 handleResult 中更新
 			})
-			LogDebug("[API] 已记录调用历史 - Cat: %s", catName)
+			LogDebug("[API] 已记录调用历史 - Cat: %s", call.AgentName)
 
 			// 发送任务到调度器
-			go func(id, name string) {
-				LogInfo("[API] 准备发送任务到调度器 - Cat: %s (ID: %s)", name, id)
-				taskID, err := ctx.Scheduler.SendTask(name, req.Content, sessionID)
+			go func(agentCall AgentCall) {
+				LogInfo("[API] 准备发送任务到调度器 - Cat: %s", agentCall.AgentName)
+				taskID, err := ctx.Scheduler.SendTask(agentCall.AgentName, agentCall.Prompt, sessionID)
 				if err != nil {
-					LogError("[API] 发送任务失败 - Cat: %s, Error: %v", name, err)
+					LogError("[API] 发送任务失败 - Cat: %s, Error: %v", agentCall.AgentName, err)
 				} else {
-					LogInfo("[API] 任务已发送 - Cat: %s, TaskID: %s", name, taskID)
+					LogInfo("[API] 任务已发送 - Cat: %s, TaskID: %s", agentCall.AgentName, taskID)
 				}
-			}(catID, catName)
+			}(call)
 		}
 	}
 
@@ -556,6 +617,97 @@ func (sm *SessionManager) handleGetCallHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, history)
 }
 
+// handleGetModes 获取所有可用模式
+func (sm *SessionManager) handleGetModes(c *gin.Context) {
+	modes := sm.orchestrator.ListModes()
+	c.JSON(http.StatusOK, modes)
+}
+
+// handleGetSessionMode 获取会话当前模式
+func (sm *SessionManager) handleGetSessionMode(c *gin.Context) {
+	sessionID := c.Param("sessionId")
+
+	sm.mu.RLock()
+	ctx, exists := sm.sessions[sessionID]
+	sm.mu.RUnlock()
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在"})
+		return
+	}
+
+	ctx.mu.RLock()
+	defer ctx.mu.RUnlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"mode":        ctx.Mode.GetName(),
+		"description": ctx.Mode.GetDescription(),
+		"config":      ctx.ModeConfig,
+		"state":       ctx.ModeState,
+	})
+}
+
+// handleSwitchMode 切换会话模式
+func (sm *SessionManager) handleSwitchMode(c *gin.Context) {
+	sessionID := c.Param("sessionId")
+
+	var req SwitchModeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	sm.mu.RLock()
+	ctx, exists := sm.sessions[sessionID]
+	sm.mu.RUnlock()
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在"})
+		return
+	}
+
+	// 创建模式配置
+	modeConfig := &ModeConfig{
+		Name:    req.Mode,
+		Enabled: true,
+		Config:  req.ModeConfig,
+	}
+
+	// 通过编排器切换模式
+	if err := sm.orchestrator.SwitchMode(sessionID, req.Mode, modeConfig); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 更新会话上下文
+	ctx.mu.Lock()
+	mode, _ := sm.orchestrator.registry.GetOrCreate(req.Mode, modeConfig)
+	ctx.Mode = mode
+	ctx.ModeConfig = modeConfig
+	ctx.ModeState = &ModeState{
+		CustomState:    make(map[string]interface{}),
+		LastUpdateTime: time.Now(),
+	}
+	ctx.mu.Unlock()
+
+	// 添加系统消息
+	ctx.mu.Lock()
+	systemMsg := Message{
+		ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
+		Type:      "system",
+		Content:   fmt.Sprintf("协作模式已切换为：%s", mode.GetDescription()),
+		Timestamp: time.Now(),
+		SessionID: sessionID,
+	}
+	ctx.Messages = append(ctx.Messages, systemMsg)
+	ctx.mu.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"mode":        mode.GetName(),
+		"description": mode.GetDescription(),
+	})
+}
+
 // SetupRouter 设置路由
 func (sm *SessionManager) SetupRouter() *gin.Engine {
 	r := gin.Default()
@@ -597,6 +749,11 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 
 		// 调用历史
 		api.GET("/sessions/:sessionId/history", sm.handleGetCallHistory)
+
+		// 模式管理
+		api.GET("/modes", sm.handleGetModes)
+		api.GET("/sessions/:sessionId/mode", sm.handleGetSessionMode)
+		api.PUT("/sessions/:sessionId/mode", sm.handleSwitchMode)
 	}
 
 	return r
@@ -713,8 +870,55 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 	// 更新调用历史中的 Response
 	sm.updateCallHistoryResponse(ctx, task.AgentName, task.Result)
 
-	// 解析回复中的 @ 调用，记录到调用历史
-	sm.parseAndRecordCalls(ctx, task.Result, task.SessionID)
+	// 通过编排器处理猫猫回复，获取下一步需要调用的猫猫
+	calls, err := sm.orchestrator.HandleAgentResponse(task.SessionID, task.AgentName, task.Result)
+	if err != nil {
+		LogError("[API] 编排器处理猫猫回复失败: %v", err)
+		return fmt.Errorf("处理猫猫回复失败: %w", err)
+	}
+
+	LogInfo("[API] 编排器返回 %d 个后续猫猫调用", len(calls))
+
+	// 处理每个后续调用
+	for _, call := range calls {
+		catID := getCatIDByName(call.AgentName)
+
+		// 只在猫猫第一次被调用时添加系统消息
+		if !ctx.JoinedCats[catID] {
+			systemMsg := Message{
+				ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
+				Type:      "system",
+				Content:   fmt.Sprintf("%s 已加入对话", call.AgentName),
+				Timestamp: time.Now(),
+				SessionID: task.SessionID,
+			}
+			ctx.Messages = append(ctx.Messages, systemMsg)
+			ctx.JoinedCats[catID] = true
+			LogDebug("[API] 猫猫互相调用 - 已添加系统消息: %s", systemMsg.ID)
+		}
+
+		// 记录调用历史
+		ctx.CallHistory = append(ctx.CallHistory, CallHistoryItem{
+			CatID:     catID,
+			CatName:   call.AgentName,
+			SessionID: task.SessionID,
+			Timestamp: time.Now(),
+			Prompt:    call.Prompt,
+			Response:  "", // 回复稍后更新
+		})
+		LogDebug("[API] 猫猫互相调用 - 已记录调用历史: %s", call.AgentName)
+
+		// 发送任务到调度器
+		go func(agentCall AgentCall) {
+			LogInfo("[API] 猫猫互相调用 - 准备发送任务: %s", agentCall.AgentName)
+			taskID, err := ctx.Scheduler.SendTask(agentCall.AgentName, agentCall.Prompt, task.SessionID)
+			if err != nil {
+				LogError("[API] 猫猫互相调用 - 发送任务失败: %s, Error: %v", agentCall.AgentName, err)
+			} else {
+				LogInfo("[API] 猫猫互相调用 - 任务已发送: %s, TaskID: %s", agentCall.AgentName, taskID)
+			}
+		}(call)
+	}
 
 	return nil
 }
@@ -728,65 +932,6 @@ func (sm *SessionManager) updateCallHistoryResponse(ctx *SessionContext, catName
 			LogDebug("[API] 已更新调用历史 Response - Cat: %s", catName)
 			break
 		}
-	}
-}
-
-// parseAndRecordCalls 解析回复中的 @ 调用并记录到调用历史
-func (sm *SessionManager) parseAndRecordCalls(ctx *SessionContext, content string, sessionID string) {
-	lines := strings.Split(content, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// 检查是否包含 @标记
-		if !strings.HasPrefix(line, "@") {
-			continue
-		}
-
-		// 解析格式: @Agent 任务内容
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
-			continue
-		}
-
-		targetAgent := strings.TrimPrefix(parts[0], "@")
-		taskContent := strings.TrimSpace(parts[1])
-
-		// 跳过 @铲屎官
-		if targetAgent == "铲屎官" {
-			continue
-		}
-
-		// 获取猫猫 ID
-		catID := getCatIDByName(targetAgent)
-		if catID == "cat_unknown" {
-			continue
-		}
-
-		// 只在猫猫第一次被调用时添加系统消息
-		if !ctx.JoinedCats[catID] {
-			systemMsg := Message{
-				ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
-				Type:      "system",
-				Content:   fmt.Sprintf("%s 已加入对话", targetAgent),
-				Timestamp: time.Now(),
-				SessionID: sessionID,
-			}
-			ctx.Messages = append(ctx.Messages, systemMsg)
-			ctx.JoinedCats[catID] = true
-			LogDebug("[API] 猫猫互相调用 - 已添加系统消息: %s", systemMsg.ID)
-		}
-
-		// 记录调用历史
-		ctx.CallHistory = append(ctx.CallHistory, CallHistoryItem{
-			CatID:     catID,
-			CatName:   targetAgent,
-			SessionID: sessionID,
-			Timestamp: time.Now(),
-			Prompt:    taskContent,
-			Response:  "", // 回复稍后更新
-		})
-		LogDebug("[API] 猫猫互相调用 - 已记录调用历史: %s", targetAgent)
 	}
 }
 

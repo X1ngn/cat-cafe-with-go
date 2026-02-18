@@ -131,12 +131,20 @@ make test
 │   ├── user_interface.go    # 交互式用户界面
 │   ├── api_server.go        # API 服务器
 │   ├── logger.go            # 日志系统
+│   ├── orchestrator.go      # 编排器
+│   ├── mode_interface.go    # 协作模式接口
+│   ├── mode_registry.go     # 模式注册表
+│   ├── mode_free_discussion.go  # 自由讨论模式
 │   ├── minimal-claude.go    # Claude CLI 包装器
 │   ├── minimal-codex.go     # Codex CLI 包装器
 │   ├── minimal-gemini.go    # Gemini CLI 包装器
 │   └── invoke.go            # CLI 调用核心逻辑
 ├── bin/                     # 编译产物
 ├── doc/                     # 后端文档
+│   ├── README.md            # 项目说明
+│   ├── BACKEND_API.md       # API 文档
+│   ├── ORCHESTRATION_DESIGN.md  # 编排层设计
+│   └── ...                  # 其他文档
 ├── frontend/                # 前端项目
 │   ├── src/                 # React 源代码
 │   └── docs/                # 前端文档
@@ -162,6 +170,10 @@ make test
 前端界面 / API 客户端
     ↓
 API 服务器 (SessionManager)
+    ↓
+编排器 (Orchestrator)
+    ├─ 协作模式管理
+    └─ 会话状态管理
     ↓ 发送任务
 调度器 (Scheduler)
     ↓
@@ -178,10 +190,22 @@ Redis Streams (结果队列)
     ↓
 API 服务器接收结果
     ↓
+编排器处理回复 (解析 @ 调用)
+    ↓
 添加到会话消息列表
     ↓
 前端轮询获取更新
 ```
+
+### 协作模式
+
+系统支持多种协作模式，每个会话可以独立选择：
+
+- **自由讨论模式** (默认) - 猫猫们可以自由互相调用
+- **SOP 流程模式** (计划中) - 按预定义流程执行
+- **更多模式** - 可扩展支持
+
+详见 [ORCHESTRATION_DESIGN.md](ORCHESTRATION_DESIGN.md)
 
 ### 消息流程
 
@@ -198,6 +222,8 @@ API 服务器接收结果
 ## 📚 文档
 
 - [API.md](../frontend/docs/API.md) - API 接口文档
+- [BACKEND_API.md](BACKEND_API.md) - 后端 API 实现说明
+- [ORCHESTRATION_DESIGN.md](ORCHESTRATION_DESIGN.md) - 编排/治理层设计
 - [COLLABORATION.md](COLLABORATION.md) - Agent 协作机制详解
 - [SPEC.md](SPEC.md) - 系统设计规范
 - [TEST_SPEC.md](TEST_SPEC.md) - 测试规范
@@ -208,6 +234,8 @@ API 服务器接收结果
 
 - ✅ **RESTful API** - 完整的 HTTP API 接口，支持前端集成
 - ✅ **会话管理** - 多会话支持，每个会话独立的调度器
+- ✅ **编排/治理层** - 支持多种协作模式，可扩展的模式管理
+- ✅ **协作模式** - 自由讨论模式已实现，支持运行时切换
 - ✅ **实时回复** - Agent 处理完成后自动将回复添加到会话
 - ✅ **智能轮询** - 前端自动获取新消息，发送后快速轮询，收到回复后慢速轮询
 - ✅ **调用历史** - 实时追踪所有被调用的猫猫，支持展开查看完整 Prompt 和 Response

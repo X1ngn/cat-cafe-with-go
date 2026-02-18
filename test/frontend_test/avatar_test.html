@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>头像显示测试</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-4xl mx-auto space-y-8">
+        <h1 class="text-3xl font-bold mb-8">头像显示测试</h1>
+
+        <!-- 测试1: 直接访问图片 -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-xl font-bold mb-4">测试1: 直接访问图片</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <p class="text-sm text-gray-600 mb-2">三花猫 (sanhua.png)</p>
+                    <img src="http://localhost:8080/images/sanhua.png" alt="sanhua" class="w-24 h-24 rounded-full object-cover border-2 border-gray-300">
+                </div>
+                <div>
+                    <p class="text-sm text-gray-600 mb-2">薇薇 (weiwei.png)</p>
+                    <img src="http://localhost:8080/images/weiwei.png" alt="weiwei" class="w-24 h-24 rounded-full object-cover border-2 border-gray-300">
+                </div>
+                <div>
+                    <p class="text-sm text-gray-600 mb-2">小乔 (xiaoqiao.png)</p>
+                    <img src="http://localhost:8080/images/xiaoqiao.png" alt="xiaoqiao" class="w-24 h-24 rounded-full object-cover border-2 border-gray-300">
+                </div>
+                <div>
+                    <p class="text-sm text-gray-600 mb-2">用户 (owner.png)</p>
+                    <img src="http://localhost:8080/images/owner.png" alt="owner" class="w-24 h-24 rounded-full object-cover border-2 border-gray-300">
+                </div>
+            </div>
+        </div>
+
+        <!-- 测试2: API 返回的数据 -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-xl font-bold mb-4">测试2: API 返回的猫猫数据</h2>
+            <button onclick="loadCats()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 mb-4">
+                加载猫猫数据
+            </button>
+            <div id="cats-container" class="space-y-4"></div>
+        </div>
+
+        <!-- 测试3: Avatar 组件模拟 -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-xl font-bold mb-4">测试3: Avatar 组件模拟</h2>
+            <div class="space-y-4">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-full overflow-hidden flex items-center justify-center" style="background-color: #ff9966;">
+                        <img src="http://localhost:8080/images/sanhua.png" alt="avatar" class="w-full h-full object-cover">
+                    </div>
+                    <span>花花 - 带背景色的头像</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-full overflow-hidden flex items-center justify-center" style="background-color: #d9bf99;">
+                        <img src="http://localhost:8080/images/weiwei.png" alt="avatar" class="w-full h-full object-cover">
+                    </div>
+                    <span>薇薇 - 带背景色的头像</span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-full overflow-hidden flex items-center justify-center" style="background-color: #cccccc;">
+                        <img src="http://localhost:8080/images/xiaoqiao.png" alt="avatar" class="w-full h-full object-cover">
+                    </div>
+                    <span>小乔 - 带背景色的头像</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 测试4: 网络请求日志 -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-xl font-bold mb-4">测试4: 网络请求日志</h2>
+            <div id="log-container" class="bg-gray-50 p-4 rounded font-mono text-sm max-h-64 overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <script>
+        const logContainer = document.getElementById('log-container');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const color = type === 'error' ? 'text-red-600' : type === 'success' ? 'text-green-600' : 'text-gray-700';
+            logContainer.innerHTML += `<div class="${color}">[${timestamp}] ${message}</div>`;
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // 监听图片加载
+        document.querySelectorAll('img').forEach(img => {
+            img.addEventListener('load', () => {
+                log(`✓ 图片加载成功: ${img.src}`, 'success');
+            });
+            img.addEventListener('error', () => {
+                log(`✗ 图片加载失败: ${img.src}`, 'error');
+            });
+        });
+
+        async function loadCats() {
+            try {
+                log('正在请求 API: http://localhost:8080/api/cats');
+                const response = await fetch('http://localhost:8080/api/cats');
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const cats = await response.json();
+                log(`✓ API 返回 ${cats.length} 只猫猫`, 'success');
+
+                const container = document.getElementById('cats-container');
+                container.innerHTML = '';
+
+                cats.forEach(cat => {
+                    log(`猫猫数据: ${cat.name}, Avatar: ${cat.avatar}`);
+
+                    const catDiv = document.createElement('div');
+                    catDiv.className = 'flex items-center gap-4 p-4 border border-gray-200 rounded-lg';
+                    catDiv.innerHTML = `
+                        <div class="w-12 h-12 rounded-full overflow-hidden flex items-center justify-center" style="background-color: ${cat.color};">
+                            <img src="http://localhost:8080${cat.avatar}" alt="${cat.name}" class="w-full h-full object-cover"
+                                 onload="log('✓ ${cat.name} 头像加载成功', 'success')"
+                                 onerror="log('✗ ${cat.name} 头像加载失败: http://localhost:8080${cat.avatar}', 'error')">
+                        </div>
+                        <div>
+                            <p class="font-medium">${cat.name}</p>
+                            <p class="text-sm text-gray-500">ID: ${cat.id}</p>
+                            <p class="text-xs text-gray-400">Avatar: ${cat.avatar}</p>
+                        </div>
+                    `;
+                    container.appendChild(catDiv);
+                });
+
+            } catch (error) {
+                log(`✗ 加载失败: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        }
+
+        // 页面加载时自动测试
+        window.addEventListener('load', () => {
+            log('页面加载完成，开始测试...');
+            setTimeout(() => {
+                loadCats();
+            }, 500);
+        });
+    </script>
+</body>
+</html>
