@@ -16,6 +16,10 @@ export const sessionAPI = {
   // 获取会话详情
   getSession: (sessionId: string) => api.get<Session>(`/sessions/${sessionId}`),
 
+  // 更新会话名称
+  updateSession: (sessionId: string, name: string) =>
+    api.put<Session>(`/sessions/${sessionId}`, { name }),
+
   // 删除会话
   deleteSession: (sessionId: string) => api.delete(`/sessions/${sessionId}`),
 };

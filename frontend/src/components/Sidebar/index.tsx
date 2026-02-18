@@ -4,7 +4,7 @@ import { SessionCard } from './SessionCard';
 import { sessionAPI } from '@/services/api';
 
 export const Sidebar: React.FC = () => {
-  const { sessions, currentSession, setCurrentSession, addSession, removeSession } = useAppStore();
+  const { sessions, currentSession, setCurrentSession, addSession, removeSession, updateSession } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
 
   const handleNewSession = async () => {
@@ -14,6 +14,16 @@ export const Sidebar: React.FC = () => {
       setCurrentSession(response.data);
     } catch (error) {
       console.error('Failed to create session:', error);
+    }
+  };
+
+  const handleRenameSession = async (sessionId: string, newName: string) => {
+    try {
+      const response = await sessionAPI.updateSession(sessionId, newName);
+      updateSession(sessionId, response.data);
+    } catch (error) {
+      console.error('Failed to rename session:', error);
+      alert('重命名失败，请重试');
     }
   };
 
@@ -111,6 +121,7 @@ export const Sidebar: React.FC = () => {
               session={session}
               isActive={currentSession?.id === session.id}
               onClick={() => setCurrentSession(session)}
+              onRename={(newName) => handleRenameSession(session.id, newName)}
               onDelete={() => handleDeleteSession(session.id)}
             />
           ))
