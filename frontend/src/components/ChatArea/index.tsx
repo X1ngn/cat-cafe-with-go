@@ -4,56 +4,53 @@ import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
 import ModeStatusBar from './ModeStatusBar';
 import { messageAPI, modeAPI } from '@/services/api';
+import { wsService } from '@/services/websocket';
+import { Message } from '@/types';
 
 export const ChatArea: React.FC = () => {
-  const { currentSession, messages, setMessages, waitingForReply, sessionMode, setSessionMode } = useAppStore();
+  const { currentSession, messages, setMessages, sessionMode, setSessionMode } = useAppStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lastMessageCountRef = useRef<number>(0);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isUserScrollingRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (currentSession) {
       loadMessages();
       loadSessionMode();
-      // 启动轮询
-      startPolling();
-    }
 
-    // 清理函数：组件卸载或会话切换时停止轮询
-    return () => {
-      stopPolling();
-    };
+      // 连接 WebSocket
+      wsService.connect(currentSession.id);
+
+      // 监听新消息
+      const unsubscribeMessage = wsService.onMessage((message: Message) => {
+        console.log('[ChatArea] 收到新消息:', message);
+        // 检查消息是否已存在，避免重复
+        const currentMessages = useAppStore.getState().messages;
+        const exists = currentMessages.some(m => m.id === message.id);
+        if (!exists) {
+          setMessages([...currentMessages, message]);
+        }
+      });
+
+      // 清理函数
+      return () => {
+        unsubscribeMessage();
+      };
+    }
   }, [currentSession]);
 
-  // 根据 waitingForReply 状态调整轮询频率
   useEffect(() => {
-    if (currentSession) {
-      startPolling();
+    // 只有在用户没有主动滚动时才自动滚动到底部
+    if (!isUserScrollingRef.current) {
+      scrollToBottom();
     }
-  }, [waitingForReply]);
-
-  useEffect(() => {
-    scrollToBottom();
   }, [messages]);
 
   const loadMessages = async () => {
     if (!currentSession) return;
     try {
       const response = await messageAPI.getMessages(currentSession.id);
-      const newMessages = response.data;
-
-      // 检查是否有新消息
-      if (newMessages.length > lastMessageCountRef.current) {
-        // 检查最后一条消息是否是猫猫的回复
-        const lastMessage = newMessages[newMessages.length - 1];
-        if (lastMessage.type === 'cat') {
-          // 收到猫猫回复，停止快速轮询
-          useAppStore.getState().setWaitingForReply(false);
-        }
-      }
-
-      lastMessageCountRef.current = newMessages.length;
-      setMessages(newMessages);
+      setMessages(response.data);
     } catch (error) {
       console.error('Failed to load messages:', error);
     }
@@ -69,28 +66,18 @@ export const ChatArea: React.FC = () => {
     }
   };
 
-  const startPolling = () => {
-    // 清除之前的轮询
-    stopPolling();
-
-    // 根据是否等待回复设置不同的轮询间隔
-    const interval = waitingForReply ? 1000 : 3000; // 等待回复时 1 秒，否则 3 秒
-
-    // 设置新的轮询
-    pollingIntervalRef.current = setInterval(() => {
-      loadMessages();
-    }, interval);
-  };
-
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  };
-
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleScroll = () => {
+    if (!messagesContainerRef.current) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px 容差
+
+    // 如果用户不在底部，标记为正在滚动
+    isUserScrollingRef.current = !isAtBottom;
   };
 
   if (!currentSession) {
@@ -111,7 +98,11 @@ export const ChatArea: React.FC = () => {
       )}
 
       {/* 消息列表 */}
-      <div className="flex-1 overflow-y-auto px-8 py-10 space-y-6">
+      <div
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-8 py-10 space-y-6"
+      >
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}

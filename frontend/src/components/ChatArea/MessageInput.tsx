@@ -177,11 +177,12 @@ export const MessageInput: React.FC = () => {
         inputValue,
         actualMentionedCats
       );
-      addMessage(response.data);
+      // 不再手动添加消息，等待 WebSocket 推送
+      // addMessage(response.data);
       setInputValue('');
       setMentionedCats([]);
 
-      // 发送消息后，设置等待回复状态，触发快速轮询
+      // 发送消息后，设置等待回复状态
       setWaitingForReply(true);
       console.log('=== handleSend 完成 ===');
     } catch (error) {
