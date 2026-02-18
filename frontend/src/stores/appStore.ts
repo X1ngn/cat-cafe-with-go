@@ -10,6 +10,7 @@ interface AppState {
   sessions: Session[];
   setSessions: (sessions: Session[]) => void;
   addSession: (session: Session) => void;
+  removeSession: (sessionId: string) => void;
 
   // 消息列表
   messages: Message[];
@@ -46,6 +47,9 @@ export const useAppStore = create<AppState>((set) => ({
   sessions: [],
   setSessions: (sessions) => set({ sessions }),
   addSession: (session) => set((state) => ({ sessions: [session, ...state.sessions] })),
+  removeSession: (sessionId) => set((state) => ({
+    sessions: state.sessions.filter(s => s.id !== sessionId)
+  })),
 
   messages: [],
   setMessages: (messages) => set({ messages }),
