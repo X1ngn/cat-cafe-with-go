@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"gopkg.in/yaml.v2"
 )
 
@@ -24,6 +25,7 @@ type SessionManager struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	orchestrator *Orchestrator // 新增：编排器
+	wsHub        *WSHub         // 新增：WebSocket Hub
 }
 
 // SessionContext 会话上下文，每个会话有独立的调度器
@@ -143,6 +145,10 @@ func NewSessionManager(configPath string) (*SessionManager, error) {
 	orchestrator := NewOrchestrator(tempScheduler, "free_discussion")
 	orchestrator.SetAgentConfigs(config.Agents)
 
+	// 创建 WebSocket Hub
+	wsHub := NewWSHub()
+	go wsHub.Run()
+
 	sm := &SessionManager{
 		sessions:     make(map[string]*SessionContext),
 		config:       config,
@@ -150,6 +156,7 @@ func NewSessionManager(configPath string) (*SessionManager, error) {
 		ctx:          ctx,
 		cancel:       cancel,
 		orchestrator: orchestrator,
+		wsHub:        wsHub,
 	}
 
 	// 启动结果监听器
@@ -339,6 +346,9 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 	ctx.UpdatedAt = time.Now()
 	LogDebug("[API] 已添加用户消息: %s", userMsg.ID)
 
+	// 通过 WebSocket 推送新消息
+	sm.wsHub.BroadcastToSession(sessionID, "message", userMsg)
+
 	// 如果有提及的猫猫，通过编排器处理
 	if len(req.MentionedCats) > 0 {
 		// 将猫猫 ID 转换为名称
@@ -380,6 +390,9 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 				ctx.Messages = append(ctx.Messages, systemMsg)
 				ctx.JoinedCats[catID] = true
 				LogDebug("[API] 已添加系统消息: %s", systemMsg.ID)
+
+				// 通过 WebSocket 推送系统消息
+				sm.wsHub.BroadcastToSession(sessionID, "message", systemMsg)
 			} else {
 				LogDebug("[API] 猫猫 %s 已在会话中，跳过系统消息", call.AgentName)
 			}
@@ -394,6 +407,9 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 				Response:  "", // 回复稍后在 handleResult 中更新
 			})
 			LogDebug("[API] 已记录调用历史 - Cat: %s", call.AgentName)
+
+			// 通过 WebSocket 推送调用历史更新
+			sm.wsHub.BroadcastToSession(sessionID, "history", ctx.CallHistory)
 
 			// 发送任务到调度器
 			go func(agentCall AgentCall) {
@@ -708,6 +724,50 @@ func (sm *SessionManager) handleSwitchMode(c *gin.Context) {
 	})
 }
 
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // 允许所有来源，生产环境应该限制
+	},
+}
+
+// handleWebSocket 处理 WebSocket 连接
+func (sm *SessionManager) handleWebSocket(c *gin.Context) {
+	sessionID := c.Param("sessionId")
+
+	// 检查会话是否存在
+	sm.mu.RLock()
+	_, exists := sm.sessions[sessionID]
+	sm.mu.RUnlock()
+
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "会话不存在"})
+		return
+	}
+
+	// 升级 HTTP 连接为 WebSocket
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		LogError("[WS] 升级连接失败: %v", err)
+		return
+	}
+
+	// 创建客户端
+	client := &WSClient{
+		conn:      conn,
+		send:      make(chan WSMessage, 256),
+		sessionID: sessionID,
+	}
+
+	// 注册客户端
+	sm.wsHub.register <- client
+
+	// 启动读写协程
+	go client.writePump()
+	go client.readPump(sm.wsHub)
+
+	LogInfo("[WS] WebSocket 连接已建立 - SessionID: %s", sessionID)
+}
+
 // SetupRouter 设置路由
 func (sm *SessionManager) SetupRouter() *gin.Engine {
 	r := gin.Default()
@@ -731,6 +791,9 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 
 	api := r.Group("/api")
 	{
+		// WebSocket 连接
+		api.GET("/sessions/:sessionId/ws", sm.handleWebSocket)
+
 		// 会话管理
 		api.GET("/sessions", sm.handleGetSessions)
 		api.POST("/sessions", sm.handleCreateSession)
@@ -876,8 +939,14 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 
 	LogInfo("[API] ✓ Agent 消息已添加 - MessageID: %s, Agent: %s", agentMsg.ID, task.AgentName)
 
+	// 通过 WebSocket 推送猫猫消息
+	sm.wsHub.BroadcastToSession(task.SessionID, "message", agentMsg)
+
 	// 更新调用历史中的 Response
 	sm.updateCallHistoryResponse(ctx, task.AgentName, task.Result)
+
+	// 通过 WebSocket 推送调用历史更新
+	sm.wsHub.BroadcastToSession(task.SessionID, "history", ctx.CallHistory)
 
 	// 通过编排器处理猫猫回复，获取下一步需要调用的猫猫
 	calls, err := sm.orchestrator.HandleAgentResponse(task.SessionID, task.AgentName, task.Result)
@@ -904,6 +973,9 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 			ctx.Messages = append(ctx.Messages, systemMsg)
 			ctx.JoinedCats[catID] = true
 			LogDebug("[API] 猫猫互相调用 - 已添加系统消息: %s", systemMsg.ID)
+
+			// 通过 WebSocket 推送系统消息
+			sm.wsHub.BroadcastToSession(task.SessionID, "message", systemMsg)
 		}
 
 		// 记录调用历史
@@ -916,6 +988,9 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 			Response:  "", // 回复稍后更新
 		})
 		LogDebug("[API] 猫猫互相调用 - 已记录调用历史: %s", call.AgentName)
+
+		// 通过 WebSocket 推送调用历史更新
+		sm.wsHub.BroadcastToSession(task.SessionID, "history", ctx.CallHistory)
 
 		// 发送任务到调度器
 		go func(agentCall AgentCall) {

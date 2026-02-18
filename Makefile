@@ -4,7 +4,7 @@
 build:
 	@echo "🔨 编译猫猫咖啡屋..."
 	go mod download
-	go build -o bin/cat-cafe src/main.go src/scheduler.go src/agent_worker.go src/user_interface.go src/api_server.go src/logger.go src/mode_interface.go src/mode_registry.go src/mode_free_discussion.go src/orchestrator.go src/invoke.go
+	go build -o bin/cat-cafe src/main.go src/scheduler.go src/agent_worker.go src/user_interface.go src/api_server.go src/logger.go src/mode_interface.go src/mode_registry.go src/mode_free_discussion.go src/orchestrator.go src/invoke.go src/websocket.go
 	go build -o bin/minimal-claude src/minimal-claude.go src/invoke.go
 	go build -o bin/minimal-codex src/minimal-codex.go src/invoke.go
 	go build -o bin/minimal-gemini src/minimal-gemini.go src/invoke.go

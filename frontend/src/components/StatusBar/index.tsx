@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { catAPI, messageAPI, historyAPI } from '@/services/api';
+import { wsService } from '@/services/websocket';
 import { Avatar } from '@/components/common/Avatar';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { MessageStats, CallHistory } from '@/types';
@@ -20,12 +21,15 @@ export const StatusBar: React.FC = () => {
       loadStats();
       loadHistory();
 
-      // 设置定时刷新调用历史（每3秒）
-      const interval = setInterval(() => {
-        loadHistory();
-      }, 3000);
+      // 监听调用历史更新
+      const unsubscribeHistory = wsService.onHistory((newHistory: CallHistory[]) => {
+        console.log('[StatusBar] 收到调用历史更新:', newHistory);
+        setHistory(newHistory);
+      });
 
-      return () => clearInterval(interval);
+      return () => {
+        unsubscribeHistory();
+      };
     }
   }, [currentSession]);
 
