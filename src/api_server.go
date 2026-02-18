@@ -277,6 +277,36 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, error) {
 	}, nil
 }
 
+// UpdateSessionName 更新会话名称
+func (sm *SessionManager) UpdateSessionName(sessionID string, name string) (*Session, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	ctx, exists := sm.sessions[sessionID]
+	if !exists {
+		return nil, fmt.Errorf("会话不存在")
+	}
+
+	// 更新名称和时间戳
+	ctx.Name = name
+	ctx.UpdatedAt = time.Now()
+
+	// 保存到 Redis
+	sm.mu.Unlock()
+	if err := sm.SaveSession(sessionID); err != nil {
+		LogError("[API] 保存重命名后的会话失败: %v", err)
+	}
+	sm.mu.Lock()
+
+	return &Session{
+		ID:           ctx.ID,
+		Name:         ctx.Name,
+		Summary:      ctx.Summary,
+		UpdatedAt:    ctx.UpdatedAt,
+		MessageCount: ctx.MessageCount,
+	}, nil
+}
+
 // ListSessions 列出所有会话
 func (sm *SessionManager) ListSessions() []Session {
 	sm.mu.RLock()
@@ -574,6 +604,25 @@ func (sm *SessionManager) handleGetSession(c *gin.Context) {
 	c.JSON(http.StatusOK, session)
 }
 
+func (sm *SessionManager) handleUpdateSession(c *gin.Context) {
+	sessionID := c.Param("sessionId")
+
+	var req struct {
+		Name string `json:"name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "名称不能为空"})
+		return
+	}
+
+	session, err := sm.UpdateSessionName(sessionID, req.Name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, session)
+}
+
 func (sm *SessionManager) handleDeleteSession(c *gin.Context) {
 	sessionID := c.Param("sessionId")
 	err := sm.DeleteSession(sessionID)
@@ -831,6 +880,7 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 		api.GET("/sessions", sm.handleGetSessions)
 		api.POST("/sessions", sm.handleCreateSession)
 		api.GET("/sessions/:sessionId", sm.handleGetSession)
+		api.PUT("/sessions/:sessionId", sm.handleUpdateSession)
 		api.DELETE("/sessions/:sessionId", sm.handleDeleteSession)
 
 		// 消息管理
