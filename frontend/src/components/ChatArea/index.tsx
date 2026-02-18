@@ -2,10 +2,11 @@ import React, { useEffect, useRef } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { MessageBubble } from './MessageBubble';
 import { MessageInput } from './MessageInput';
-import { messageAPI } from '@/services/api';
+import ModeStatusBar from './ModeStatusBar';
+import { messageAPI, modeAPI } from '@/services/api';
 
 export const ChatArea: React.FC = () => {
-  const { currentSession, messages, setMessages, waitingForReply } = useAppStore();
+  const { currentSession, messages, setMessages, waitingForReply, sessionMode, setSessionMode } = useAppStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastMessageCountRef = useRef<number>(0);
@@ -13,6 +14,7 @@ export const ChatArea: React.FC = () => {
   useEffect(() => {
     if (currentSession) {
       loadMessages();
+      loadSessionMode();
       // 启动轮询
       startPolling();
     }
@@ -57,6 +59,16 @@ export const ChatArea: React.FC = () => {
     }
   };
 
+  const loadSessionMode = async () => {
+    if (!currentSession) return;
+    try {
+      const response = await modeAPI.getSessionMode(currentSession.id);
+      setSessionMode(response.data);
+    } catch (error) {
+      console.error('Failed to load session mode:', error);
+    }
+  };
+
   const startPolling = () => {
     // 清除之前的轮询
     stopPolling();
@@ -91,6 +103,13 @@ export const ChatArea: React.FC = () => {
 
   return (
     <div className="flex-1 bg-white flex flex-col">
+      {/* 模式状态栏 */}
+      {sessionMode && (
+        <div className="px-8 pt-4">
+          <ModeStatusBar mode={sessionMode.mode} />
+        </div>
+      )}
+
       {/* 消息列表 */}
       <div className="flex-1 overflow-y-auto px-8 py-10 space-y-6">
         {messages.map((message) => (

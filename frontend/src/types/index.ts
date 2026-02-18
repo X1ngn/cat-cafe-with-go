@@ -36,3 +36,27 @@ export interface CallHistory {
   prompt: string;
   response: string;
 }
+
+// 模式相关类型
+export interface ModeConfig {
+  name: string;
+  enabled: boolean;
+  [key: string]: any;
+}
+
+export interface ModeState {
+  customState: Record<string, any>;
+  lastUpdateTime: string;
+}
+
+export interface ModeInfo {
+  name: string;
+  description: string;
+}
+
+export interface SessionMode {
+  mode: string;
+  description: string;
+  config: ModeConfig;
+  state: ModeState;
+}
