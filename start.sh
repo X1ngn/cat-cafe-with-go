@@ -30,7 +30,7 @@ echo "✓ 编译成功"
 # 启动 API 服务器
 echo ""
 echo "🚀 启动 API 服务器..."
-./bin/cat-cafe --mode api --port 8080 &
+./bin/api_server -mode api -port 8082 > logs/api.log 2>&1 &
 API_PID=$!
 
 echo "✓ API 服务器已启动 (PID: $API_PID)"
@@ -40,15 +40,15 @@ echo ""
 echo "🐱 启动猫猫 Agent..."
 
 # 取消 CLAUDECODE 环境变量，避免嵌套会话冲突
-env -u CLAUDECODE ./bin/cat-cafe --mode agent --agent 花花 &
+env -u CLAUDECODE ./bin/api_server -mode agent -agent 花花 > logs/agent_huahua.log 2>&1 &
 AGENT1_PID=$!
 echo "✓ 花花已启动 (PID: $AGENT1_PID)"
 
-env -u CLAUDECODE ./bin/cat-cafe --mode agent --agent 薇薇 &
+env -u CLAUDECODE ./bin/api_server -mode agent -agent 薇薇 > logs/agent_weiwei.log 2>&1 &
 AGENT2_PID=$!
 echo "✓ 薇薇已启动 (PID: $AGENT2_PID)"
 
-env -u CLAUDECODE ./bin/cat-cafe --mode agent --agent 小乔 &
+env -u CLAUDECODE ./bin/api_server -mode agent -agent 小乔 > logs/agent_xiaoqiao.log 2>&1 &
 AGENT3_PID=$!
 echo "✓ 小乔已启动 (PID: $AGENT3_PID)"
 
@@ -61,16 +61,16 @@ echo "   花花: $AGENT1_PID"
 echo "   薇薇: $AGENT2_PID"
 echo "   小乔: $AGENT3_PID"
 echo ""
-echo "🌐 API 地址: http://localhost:8080"
-echo "📖 API 文档: frontend/docs/API.md"
+echo "🌐 API 地址: http://localhost:8081"
+echo "📖 日志目录: logs/"
 echo ""
 echo "按 Ctrl+C 停止所有服务"
 
 # 保存 PID 到文件
-echo "$API_PID" > .api.pid
-echo "$AGENT1_PID" > .agent1.pid
-echo "$AGENT2_PID" > .agent2.pid
-echo "$AGENT3_PID" > .agent3.pid
+echo "$API_PID" > logs/.api.pid
+echo "$AGENT1_PID" > logs/.agent1.pid
+echo "$AGENT2_PID" > logs/.agent2.pid
+echo "$AGENT3_PID" > logs/.agent3.pid
 
 # 等待中断信号
 trap "echo ''; echo '🛑 停止所有服务...'; kill $API_PID $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null; rm -f .api.pid .agent1.pid .agent2.pid .agent3.pid; echo '✓ 已停止'; exit 0" INT TERM

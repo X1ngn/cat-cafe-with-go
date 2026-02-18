@@ -1,0 +1,66 @@
+# 编译产物
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 测试文件
+*.test
+*.out
+
+# 日志文件
+logs/
+*.log
+
+# 临时文件
+*.tmp
+*.swp
+*.swo
+*~
+
+# 会话文件（已移到系统临时目录）
+.claude_session
+.codex_session
+.gemini_session
+
+# PID 文件
+.pids/
+.agent*.pid
+.api.pid
+
+# Redis 数据
+dump.rdb
+
+# 依赖
+node_modules/
+vendor/
+
+# IDE 配置
+.vscode/
+.idea/
+*.iml
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 前端构建产物
+frontend/dist/
+frontend/build/
+frontend/.next/
+
+# 环境变量
+.env
+.env.local
+
+# 测试覆盖率
+coverage/
+*.cover
+
+# 其他
+chat_history.jsonl
+package-lock.json
+test/prompts_test/
+images/
+*.eddx

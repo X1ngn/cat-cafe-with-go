@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -77,28 +76,63 @@ func (m *FreeDiscussionMode) Initialize(sessionID string) error {
 func (m *FreeDiscussionMode) parseAtMentions(text string, sessionID string, callerName string) []AgentCall {
 	calls := []AgentCall{}
 
-	// 正则表达式匹配 @猫猫名
-	// 匹配行首的 @ 后跟猫猫名称
-	re := regexp.MustCompile(`(?m)^@([^\s]+)\s+(.+?)(?=\n@|$)`)
-	matches := re.FindAllStringSubmatch(text, -1)
+	// 按行分割文本
+	lines := strings.Split(text, "\n")
 
-	for _, match := range matches {
-		if len(match) >= 3 {
-			catName := strings.TrimSpace(match[1])
-			prompt := strings.TrimSpace(match[2])
+	var currentCat string
+	var currentPrompt strings.Builder
 
-			// 跳过 @铲屎官（返回给用户）
-			if catName == "铲屎官" {
-				continue
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// 检查是否是新的 @ 提及
+		if strings.HasPrefix(line, "@") {
+			// 保存之前的提及
+			if currentCat != "" && currentPrompt.Len() > 0 {
+				prompt := strings.TrimSpace(currentPrompt.String())
+				if currentCat != "铲屎官" && prompt != "" {
+					calls = append(calls, AgentCall{
+						AgentName:  currentCat,
+						Prompt:     prompt,
+						SessionID:  sessionID,
+						CallerName: callerName,
+						Metadata: map[string]interface{}{
+							"source":       "agent_response",
+							"caller_agent": callerName,
+						},
+					})
+				}
 			}
 
+			// 解析新的 @ 提及
+			parts := strings.SplitN(line[1:], " ", 2)
+			currentCat = strings.TrimSpace(parts[0])
+			currentPrompt.Reset()
+
+			// 如果同一行有内容，添加到 prompt
+			if len(parts) > 1 {
+				currentPrompt.WriteString(strings.TrimSpace(parts[1]))
+			}
+		} else if currentCat != "" && line != "" {
+			// 继续添加到当前 prompt
+			if currentPrompt.Len() > 0 {
+				currentPrompt.WriteString("\n")
+			}
+			currentPrompt.WriteString(line)
+		}
+	}
+
+	// 保存最后一个提及
+	if currentCat != "" && currentPrompt.Len() > 0 {
+		prompt := strings.TrimSpace(currentPrompt.String())
+		if currentCat != "铲屎官" && prompt != "" {
 			calls = append(calls, AgentCall{
-				AgentName:  catName,
+				AgentName:  currentCat,
 				Prompt:     prompt,
 				SessionID:  sessionID,
 				CallerName: callerName,
 				Metadata: map[string]interface{}{
-					"source":      "agent_response",
+					"source":       "agent_response",
 					"caller_agent": callerName,
 				},
 			})
