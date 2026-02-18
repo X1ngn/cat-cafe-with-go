@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Cat, Message, Session } from '@/types';
+import { Cat, Message, Session, SessionMode } from '@/types';
 
 interface AppState {
   // 当前会话
@@ -33,6 +33,10 @@ interface AppState {
   // 等待回复状态
   waitingForReply: boolean;
   setWaitingForReply: (waiting: boolean) => void;
+
+  // 会话模式状态
+  sessionMode: SessionMode | null;
+  setSessionMode: (mode: SessionMode | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -60,4 +64,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   waitingForReply: false,
   setWaitingForReply: (waiting) => set({ waitingForReply: waiting }),
+
+  sessionMode: null,
+  setSessionMode: (mode) => set({ sessionMode: mode }),
 }));

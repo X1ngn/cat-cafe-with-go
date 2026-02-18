@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Cat, Message, Session, MessageStats, CallHistory } from '@/types';
+import { Cat, Message, Session, MessageStats, CallHistory, ModeInfo, SessionMode } from '@/types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -49,6 +49,19 @@ export const historyAPI = {
   // 获取调用历史
   getCallHistory: (sessionId: string) =>
     api.get<CallHistory[]>(`/sessions/${sessionId}/history`),
+};
+
+export const modeAPI = {
+  // 获取所有可用模式
+  getModes: () => api.get<ModeInfo[]>('/modes'),
+
+  // 获取会话当前模式状态
+  getSessionMode: (sessionId: string) =>
+    api.get<SessionMode>(`/sessions/${sessionId}/mode`),
+
+  // 切换会话模式
+  switchMode: (sessionId: string, mode: string, config?: Record<string, any>) =>
+    api.put<SessionMode>(`/sessions/${sessionId}/mode`, { mode, modeConfig: config || {} }),
 };
 
 export default api;

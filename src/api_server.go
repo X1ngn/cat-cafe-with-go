@@ -827,11 +827,13 @@ func (sm *SessionManager) listenForResults() {
 func (sm *SessionManager) handleResult(message redis.XMessage) error {
 	taskData, ok := message.Values["task"].(string)
 	if !ok {
+		LogError("[API] message task处理结果失败")
 		return fmt.Errorf("无效的任务数据")
 	}
 
 	var task TaskMessage
 	if err := json.Unmarshal([]byte(taskData), &task); err != nil {
+		LogError("[API] Unmarshal处理结果失败: %v", err)
 		return fmt.Errorf("解析任务失败: %w", err)
 	}
 
@@ -844,7 +846,14 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 	sm.mu.RUnlock()
 
 	if !exists {
-		LogWarn("[API] 会话不存在: %s", task.SessionID)
+		// 打印当前所有会话 ID 用于调试
+		sm.mu.RLock()
+		sessionIDs := make([]string, 0, len(sm.sessions))
+		for sid := range sm.sessions {
+			sessionIDs = append(sessionIDs, sid)
+		}
+		sm.mu.RUnlock()
+		LogWarn("[API] 会话不存在: %s, 当前会话列表: %v", task.SessionID, sessionIDs)
 		return fmt.Errorf("会话不存在: %s", task.SessionID)
 	}
 
