@@ -162,34 +162,45 @@ func NewSessionManager(configPath string) (*SessionManager, error) {
 	// 启动结果监听器
 	go sm.listenForResults()
 
+	// 从 Redis 加载已有的会话
+	if err := sm.LoadAllSessions(); err != nil {
+		LogWarn("[API] 加载会话失败: %v", err)
+	}
+
 	return sm, nil
 }
 
 // CreateSession 创建新会话
 func (sm *SessionManager) CreateSession() (*Session, error) {
+	LogDebug("[API] 开始创建会话")
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	sessionID := fmt.Sprintf("sess_%s", uuid.New().String()[:8])
+	LogDebug("[API] 生成会话 ID: %s", sessionID)
 
 	// 为每个会话创建独立的调度器
+	LogDebug("[API] 创建调度器: %s", sessionID)
 	scheduler, err := NewScheduler("config.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("创建调度器失败: %w", err)
 	}
 
 	// 创建默认模式配置
+	LogDebug("[API] 创建模式配置: %s", sessionID)
 	modeConfig := &ModeConfig{
 		Name:    "free_discussion",
 		Enabled: true,
 	}
 
 	// 从编排器获取模式实例
+	LogDebug("[API] 获取模式实例: %s", sessionID)
 	mode, err := sm.orchestrator.registry.GetOrCreate("free_discussion", modeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("创建协作模式失败: %w", err)
 	}
 
+	LogDebug("[API] 创建会话上下文: %s", sessionID)
 	ctx := &SessionContext{
 		ID:           sessionID,
 		Name:         "新对话",
@@ -212,21 +223,32 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 	sm.sessions[sessionID] = ctx
 
 	// 在编排器中注册会话
+	LogDebug("[API] 在编排器中注册会话: %s", sessionID)
 	if err := sm.orchestrator.CreateSession(sessionID, "free_discussion", modeConfig); err != nil {
 		delete(sm.sessions, sessionID)
 		return nil, fmt.Errorf("在编排器中注册会话失败: %w", err)
 	}
 
 	// 添加系统欢迎消息
+	LogDebug("[API] 添加欢迎消息: %s", sessionID)
 	welcomeMsg := Message{
 		ID:        fmt.Sprintf("msg_%s", uuid.New().String()[:8]),
 		Type:      "system",
-		Content:   fmt.Sprintf("会话已创建，当前模式：%s", mode.GetDescription()),
+		Content:   "会话已创建，当前模式：自由讨论",
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 	}
 	ctx.Messages = append(ctx.Messages, welcomeMsg)
 
+	// 先解锁，再保存会话到 Redis（避免死锁）
+	sm.mu.Unlock()
+	LogDebug("[API] 保存会话到 Redis: %s", sessionID)
+	if err := sm.SaveSession(sessionID); err != nil {
+		LogError("[API] 保存新会话失败: %v", err)
+	}
+	sm.mu.Lock() // 重新加锁以便 defer 正常解锁
+
+	LogDebug("[API] 会话创建完成: %s", sessionID)
 	return &Session{
 		ID:           ctx.ID,
 		Name:         ctx.Name,
@@ -290,6 +312,11 @@ func (sm *SessionManager) DeleteSession(sessionID string) error {
 	// 从编排器中删除会话
 	sm.orchestrator.DeleteSession(sessionID)
 
+	// 从 Redis 删除会话
+	if err := sm.DeleteSessionFromRedis(sessionID); err != nil {
+		LogError("[API] 从 Redis 删除会话失败: %v", err)
+	}
+
 	delete(sm.sessions, sessionID)
 
 	return nil
@@ -348,6 +375,9 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 
 	// 通过 WebSocket 推送新消息
 	sm.wsHub.BroadcastToSession(sessionID, "message", userMsg)
+
+	// 自动保存会话
+	sm.AutoSaveSession(sessionID)
 
 	// 如果有提及的猫猫，通过编排器处理
 	if len(req.MentionedCats) > 0 {
@@ -718,6 +748,9 @@ func (sm *SessionManager) handleSwitchMode(c *gin.Context) {
 	ctx.Messages = append(ctx.Messages, systemMsg)
 	ctx.mu.Unlock()
 
+	// 自动保存会话
+	sm.AutoSaveSession(sessionID)
+
 	c.JSON(http.StatusOK, gin.H{
 		"mode":        mode.GetName(),
 		"description": mode.GetDescription(),
@@ -947,6 +980,9 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 
 	// 通过 WebSocket 推送调用历史更新
 	sm.wsHub.BroadcastToSession(task.SessionID, "history", ctx.CallHistory)
+
+	// 自动保存会话
+	sm.AutoSaveSession(task.SessionID)
 
 	// 通过编排器处理猫猫回复，获取下一步需要调用的猫猫
 	calls, err := sm.orchestrator.HandleAgentResponse(task.SessionID, task.AgentName, task.Result)
