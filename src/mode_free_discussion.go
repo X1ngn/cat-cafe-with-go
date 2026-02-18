@@ -88,9 +88,10 @@ func (m *FreeDiscussionMode) parseAtMentions(text string, sessionID string, call
 		// 检查是否是新的 @ 提及
 		if strings.HasPrefix(line, "@") {
 			// 保存之前的提及
-			if currentCat != "" && currentPrompt.Len() > 0 {
+			if currentCat != "" {
 				prompt := strings.TrimSpace(currentPrompt.String())
-				if currentCat != "铲屎官" && prompt != "" {
+				// 允许空 prompt
+				if currentCat != "铲屎官" {
 					calls = append(calls, AgentCall{
 						AgentName:  currentCat,
 						Prompt:     prompt,
@@ -123,9 +124,10 @@ func (m *FreeDiscussionMode) parseAtMentions(text string, sessionID string, call
 	}
 
 	// 保存最后一个提及
-	if currentCat != "" && currentPrompt.Len() > 0 {
+	if currentCat != "" {
 		prompt := strings.TrimSpace(currentPrompt.String())
-		if currentCat != "铲屎官" && prompt != "" {
+		// 允许空 prompt，因为可能只是 @ 提及而没有具体任务
+		if currentCat != "铲屎官" {
 			calls = append(calls, AgentCall{
 				AgentName:  currentCat,
 				Prompt:     prompt,

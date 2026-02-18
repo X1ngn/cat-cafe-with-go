@@ -100,6 +100,9 @@ export const MessageInput: React.FC = () => {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
+    console.log('=== handleInputChange ===');
+    console.log('新值:', value);
+    console.log('旧值:', inputValue);
     setInputValue(value);
 
     // 检测 @ 符号
@@ -129,26 +132,45 @@ export const MessageInput: React.FC = () => {
 
   // 从文本中解析实际提及的猫猫
   const parseMentionedCats = (text: string): string[] => {
+    console.log('=== parseMentionedCats 开始 ===');
+    console.log('输入文本:', text);
+    console.log('文本长度:', text.length);
+    console.log('文本字符码:', Array.from(text).map(c => `${c}(${c.charCodeAt(0)})`).join(' '));
+    console.log('可用猫猫列表:', cats);
+
     const mentionedCatIds: string[] = [];
 
     // 匹配所有 @猫猫名
     cats.forEach((cat) => {
       // 使用更宽松的匹配，支持中文字符
       const regex = new RegExp(`@${cat.name}(?=\\s|$)`, 'g');
-      if (regex.test(text)) {
+      const matches = regex.test(text);
+      console.log(`测试 @${cat.name}:`, matches, '正则:', regex.source);
+      if (matches) {
+        console.log(`✓ 匹配成功，添加猫猫 ID:`, cat.id);
         mentionedCatIds.push(cat.id);
       }
     });
 
+    console.log('最终解析结果:', mentionedCatIds);
+    console.log('=== parseMentionedCats 结束 ===');
     return mentionedCatIds;
   };
 
   const handleSend = async () => {
     if (!inputValue.trim() || !currentSession) return;
 
+    console.log('=== handleSend 开始 ===');
+    console.log('当前输入值:', inputValue);
+
     try {
       // 从实际输入内容中解析 @ 提及的猫猫
       const actualMentionedCats = parseMentionedCats(inputValue);
+
+      console.log('准备发送消息:');
+      console.log('  - sessionId:', currentSession.id);
+      console.log('  - content:', inputValue);
+      console.log('  - mentionedCats:', actualMentionedCats);
 
       const response = await messageAPI.sendMessage(
         currentSession.id,
@@ -161,6 +183,7 @@ export const MessageInput: React.FC = () => {
 
       // 发送消息后，设置等待回复状态，触发快速轮询
       setWaitingForReply(true);
+      console.log('=== handleSend 完成 ===');
     } catch (error) {
       console.error('Failed to send message:', error);
     }
