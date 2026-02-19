@@ -18,14 +18,15 @@ import (
 
 // SessionManager 管理所有会话
 type SessionManager struct {
-	sessions     map[string]*SessionContext
-	mu           sync.RWMutex
-	config       *Config
-	redisClient  *redis.Client
-	ctx          context.Context
-	cancel       context.CancelFunc
-	orchestrator *Orchestrator // 新增：编排器
-	wsHub        *WSHub         // 新增：WebSocket Hub
+	sessions         map[string]*SessionContext
+	mu               sync.RWMutex
+	config           *Config
+	redisClient      *redis.Client
+	ctx              context.Context
+	cancel           context.CancelFunc
+	orchestrator     *Orchestrator      // 新增：编排器
+	wsHub            *WSHub             // 新增：WebSocket Hub
+	workspaceManager *WorkspaceManager  // 新增：工作区管理器
 }
 
 // SessionContext 会话上下文，每个会话有独立的调度器
@@ -149,14 +150,18 @@ func NewSessionManager(configPath string) (*SessionManager, error) {
 	wsHub := NewWSHub()
 	go wsHub.Run()
 
+	// 创建工作区管理器
+	workspaceManager := NewWorkspaceManager(rdb, ctx)
+
 	sm := &SessionManager{
-		sessions:     make(map[string]*SessionContext),
-		config:       config,
-		redisClient:  rdb,
-		ctx:          ctx,
-		cancel:       cancel,
-		orchestrator: orchestrator,
-		wsHub:        wsHub,
+		sessions:         make(map[string]*SessionContext),
+		config:           config,
+		redisClient:      rdb,
+		ctx:              ctx,
+		cancel:           cancel,
+		orchestrator:     orchestrator,
+		wsHub:            wsHub,
+		workspaceManager: workspaceManager,
 	}
 
 	// 启动结果监听器
@@ -562,7 +567,7 @@ func (sm *SessionManager) GetCats() []Cat {
 		catID := catIDMap[agent.Name]
 		color := catColorMap[agent.Name]
 
-		LogDebug("[API] 添加猫猫: %s, Avatar: %s", agent.Name, agent.Avatar)
+		LogDebug("[API] aaaa添加猫猫: %s, Avatar: %s", agent.Name, agent.Avatar)
 
 		cats = append(cats, Cat{
 			ID:     catID,
@@ -854,18 +859,28 @@ func (sm *SessionManager) handleWebSocket(c *gin.Context) {
 func (sm *SessionManager) SetupRouter() *gin.Engine {
 	r := gin.Default()
 
+	// 禁用自动重定向
+	r.RedirectTrailingSlash = false
+	r.RedirectFixedPath = false
+
 	// CORS 中间件
 	r.Use(func(c *gin.Context) {
+		origin := c.Request.Header.Get("Origin")
+		LogDebug("[CORS] Request from origin: %s, method: %s, path: %s", origin, c.Request.Method, c.Request.URL.Path)
+
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 		if c.Request.Method == "OPTIONS" {
+			LogDebug("[CORS] Handling OPTIONS preflight request")
 			c.AbortWithStatus(204)
 			return
 		}
 
 		c.Next()
+
+		LogDebug("[CORS] Response headers: %v", c.Writer.Header())
 	})
 
 	// 静态文件服务 - 提供头像图片
@@ -876,9 +891,11 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 		// WebSocket 连接
 		api.GET("/sessions/:sessionId/ws", sm.handleWebSocket)
 
-		// 会话管理
+		// 会话管理（支持带/不带尾部斜杠）
 		api.GET("/sessions", sm.handleGetSessions)
+		api.GET("/sessions/", sm.handleGetSessions)
 		api.POST("/sessions", sm.handleCreateSession)
+		api.POST("/sessions/", sm.handleCreateSession)
 		api.GET("/sessions/:sessionId", sm.handleGetSession)
 		api.PUT("/sessions/:sessionId", sm.handleUpdateSession)
 		api.DELETE("/sessions/:sessionId", sm.handleDeleteSession)
@@ -900,6 +917,19 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 		api.GET("/modes", sm.handleGetModes)
 		api.GET("/sessions/:sessionId/mode", sm.handleGetSessionMode)
 		api.PUT("/sessions/:sessionId/mode", sm.handleSwitchMode)
+
+		// 工作区管理
+		api.GET("/workspaces", sm.handleGetWorkspaces)
+		api.POST("/workspaces", sm.handleCreateWorkspace)
+		api.GET("/workspaces/:workspaceId", sm.handleGetWorkspace)
+		api.PUT("/workspaces/:workspaceId", sm.handleUpdateWorkspace)
+		api.DELETE("/workspaces/:workspaceId", sm.handleDeleteWorkspace)
+
+		// 部署管理
+		api.POST("/workspaces/:workspaceId/deploy-test", sm.handleDeployToTest)
+		api.POST("/deployments/:deploymentId/promote", sm.handlePromoteToProduction)
+		api.GET("/deployments/:deploymentId", sm.handleGetDeployment)
+		api.GET("/workspaces/:workspaceId/deployments", sm.handleGetDeployments)
 	}
 
 	return r
@@ -1147,4 +1177,112 @@ func (sm *SessionManager) getCatInfoByName(name string) *Sender {
 		Avatar: avatar,
 		Color:  catColorMap[name],
 	}
+}
+
+// 工作区 API 处理函数
+
+func (sm *SessionManager) handleGetWorkspaces(c *gin.Context) {
+	workspaces := sm.workspaceManager.ListWorkspaces()
+	c.JSON(http.StatusOK, workspaces)
+}
+
+func (sm *SessionManager) handleCreateWorkspace(c *gin.Context) {
+	var req struct {
+		Path string        `json:"path" binding:"required"`
+		Type WorkspaceType `json:"type" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	workspace, err := sm.workspaceManager.CreateWorkspace(req.Path, req.Type)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, workspace)
+}
+
+func (sm *SessionManager) handleGetWorkspace(c *gin.Context) {
+	workspaceID := c.Param("workspaceId")
+	workspace, err := sm.workspaceManager.GetWorkspace(workspaceID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, workspace)
+}
+
+func (sm *SessionManager) handleUpdateWorkspace(c *gin.Context) {
+	workspaceID := c.Param("workspaceId")
+
+	var updates map[string]interface{}
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	workspace, err := sm.workspaceManager.UpdateWorkspace(workspaceID, updates)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, workspace)
+}
+
+func (sm *SessionManager) handleDeleteWorkspace(c *gin.Context) {
+	workspaceID := c.Param("workspaceId")
+	err := sm.workspaceManager.DeleteWorkspace(workspaceID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (sm *SessionManager) handleDeployToTest(c *gin.Context) {
+	workspaceID := c.Param("workspaceId")
+
+	deployment, err := sm.workspaceManager.DeployToTest(workspaceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, deployment)
+}
+
+func (sm *SessionManager) handlePromoteToProduction(c *gin.Context) {
+	deploymentID := c.Param("deploymentId")
+
+	err := sm.workspaceManager.PromoteToProduction(deploymentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	deployment, _ := sm.workspaceManager.GetDeployment(deploymentID)
+	c.JSON(http.StatusOK, deployment)
+}
+
+func (sm *SessionManager) handleGetDeployment(c *gin.Context) {
+	deploymentID := c.Param("deploymentId")
+
+	deployment, err := sm.workspaceManager.GetDeployment(deploymentID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, deployment)
+}
+
+func (sm *SessionManager) handleGetDeployments(c *gin.Context) {
+	workspaceID := c.Param("workspaceId")
+
+	deployments := sm.workspaceManager.ListDeployments(workspaceID)
+	c.JSON(http.StatusOK, deployments)
 }
