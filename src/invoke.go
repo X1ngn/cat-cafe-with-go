@@ -117,6 +117,9 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stderr)
+		// 增加缓冲区大小到 1MB，避免 "token too long" 错误
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			stderrOutput.WriteString(line)
@@ -132,6 +135,9 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stdout)
+		// 增加缓冲区大小到 1MB，避免 "token too long" 错误
+		buf := make([]byte, 0, 64*1024)
+		scanner.Buffer(buf, 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 
