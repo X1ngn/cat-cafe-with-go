@@ -76,6 +76,15 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 
 	cmd := exec.Command(cliName, args...)
 
+	// 移除 CLAUDECODE 环境变量，避免嵌套会话冲突
+	env := []string{}
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "CLAUDECODE=") {
+			env = append(env, e)
+		}
+	}
+	cmd.Env = env
+
 	// 对于 codex，通过 stdin 传递 prompt
 	if cliName == "codex" {
 		stdin, err := cmd.StdinPipe()
@@ -147,7 +156,7 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 						for _, contentBlock := range event.Message.Content {
 							if contentBlock.Type == "text" {
 								assistantResponse += contentBlock.Text
-								fmt.Print(contentBlock.Text) // 实时打印
+								fmt.Fprint(os.Stderr, contentBlock.Text) // 输出到 stderr
 							}
 						}
 					}
@@ -164,7 +173,7 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 						sessionID = event.SessionID
 					} else if event.Type == "message" && event.Role == "assistant" && event.Content != "" {
 						assistantResponse += event.Content
-						fmt.Print(event.Content) // 实时打印
+						fmt.Fprint(os.Stderr, event.Content) // 输出到 stderr
 					}
 				}
 			case "codex":
@@ -184,7 +193,7 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 						sessionID = event.SessionID
 					} else if event.Type == "item.completed" && event.Item.Type == "agent_message" && event.Item.Text != "" {
 						assistantResponse += event.Item.Text
-						fmt.Print(event.Item.Text) // 实时打印
+						fmt.Fprint(os.Stderr, event.Item.Text) // 输出到 stderr
 					}
 				}
 			}
