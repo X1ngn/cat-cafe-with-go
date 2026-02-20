@@ -23,7 +23,7 @@ func main() {
 	)
 
 	flag.Parse()
-
+	
 	// 检查是否提供了 prompt
 	if flag.NArg() < 1 {
 		fmt.Fprintf(os.Stderr, "用法: %s [选项] \"你的问题\"\n", os.Args[0])
@@ -39,18 +39,7 @@ func main() {
 		Model:          *model,
 		AllowedTools:   *allowedTools,
 		PermissionMode: *permissionMode,
-	}
-
-	// 如果没有通过命令行提供 session ID，则尝试从文件加载
-	if *sessionIDFlag == "" {
-		loadedSessionID, err := LoadSessionID("claude")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "加载 Claude 会话失败: %v\n", err)
-			os.Exit(1)
-		}
-		options.SessionID = loadedSessionID
-	} else {
-		options.SessionID = *sessionIDFlag
+		SessionID:      *sessionIDFlag, // 直接使用命令行参数，如果为空则创建新会话
 	}
 
 	// 调用 Claude 代理
@@ -60,11 +49,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 如果返回了新的 session ID 并且与当前使用的不同，则保存
-	if newSessionID != "" && newSessionID != options.SessionID {
-		if err := SaveSessionID("claude", newSessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "保存 Claude 会话失败: %v\n", err)
-			os.Exit(1)
-		}
+	// 输出 Session ID 到 stdout（单独一行，方便提取）
+	if newSessionID != "" {
+		fmt.Printf("SESSION_ID:%s\n", newSessionID)
 	}
 }

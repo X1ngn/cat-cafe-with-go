@@ -50,20 +50,8 @@ func main() {
 
 	// 配置选项
 	options := AgentOptions{
-		Model: *model,
-	}
-
-	// 如果没有通过命令行提供 session ID，则尝试从文件加载
-	if *sessionIDFlag == "" {
-		loadedSessionID, err := LoadSessionID("codex")
-		if err != nil {
-			// 如果加载失败，使用空的 SessionID（开始新会话）
-			options.SessionID = ""
-		} else {
-			options.SessionID = loadedSessionID
-		}
-	} else {
-		options.SessionID = *sessionIDFlag
+		Model:     *model,
+		SessionID: *sessionIDFlag, // 直接使用命令行参数，如果为空则创建新会话
 	}
 
 	// 调用 Codex 代理
@@ -73,11 +61,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 如果返回了新的 session ID 并且与当前使用的不同，则保存
-	if newSessionID != "" && newSessionID != options.SessionID {
-		if err := SaveSessionID("codex", newSessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "保存 Codex 会话失败: %v\n", err)
-			os.Exit(1)
-		}
+	// 输出 Session ID 到 stdout（单独一行，方便提取）
+	if newSessionID != "" {
+		fmt.Printf("SESSION_ID:%s\n", newSessionID)
 	}
 }

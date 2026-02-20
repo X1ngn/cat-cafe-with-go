@@ -197,23 +197,93 @@ func (w *AgentWorker) handleMessage(message redis.XMessage) error {
 
 // executeTask 执行任务
 func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
-	LogDebug("[Agent-%s] 开始执行任务: %s", w.config.Name, task.TaskID)
+	LogDebug("[Agent-%s] 开始执行任务: %s, SessionID: %s", w.config.Name, task.TaskID, task.SessionID)
 	LogDebug("[Agent-%s] 执行命令: %s", w.config.Name, w.config.ExecCmd)
 
 	// 组合系统提示词和用户内容
 	fullPrompt := fmt.Sprintf("%s\n\n========================================\n\n用户需求：\n%s", w.systemPrompt, task.Content)
 
-	// 执行命令
-	// 执行命令，prompt 作为位置参数传递
-	cmd := exec.CommandContext(w.ctx, w.config.ExecCmd, fullPrompt)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		LogError("[Agent-%s] 执行命令失败: %v, 输出: %s", w.config.Name, err, string(output))
-		return "", fmt.Errorf("执行命令失败: %w, 输出: %s", err, string(output))
+	// 查询 AI Session ID 映射
+	var aiSessionID string
+	if task.SessionID != "" {
+		mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
+		aiSessionID, _ = w.redisClient.Get(w.ctx, mappingKey).Result()
+		if aiSessionID != "" {
+			LogDebug("[Agent-%s] 找到 AI Session ID 映射: %s -> %s", w.config.Name, task.SessionID, aiSessionID)
+		} else {
+			LogDebug("[Agent-%s] 未找到 AI Session ID 映射，将创建新会话", w.config.Name)
+		}
 	}
 
-	LogDebug("[Agent-%s] 命令执行成功，输出长度: %d", w.config.Name, len(output))
-	return string(output), nil
+	// 执行命令，传递 prompt 和 AI session ID
+	var cmd *exec.Cmd
+	if aiSessionID != "" {
+		// 如果有 AI SessionID，使用 --resume 参数传递（必须在 prompt 之前）
+		cmd = exec.CommandContext(w.ctx, w.config.ExecCmd, "--resume", aiSessionID, fullPrompt)
+		LogDebug("[Agent-%s] 使用 AI SessionID: %s", w.config.Name, aiSessionID)
+	} else {
+		// 没有 AI SessionID，只传递 prompt，让 AI 创建新会话
+		cmd = exec.CommandContext(w.ctx, w.config.ExecCmd, fullPrompt)
+		LogDebug("[Agent-%s] 创建新 AI 会话", w.config.Name)
+	}
+
+	// 取消设置 CLAUDECODE 环境变量，避免嵌套会话错误
+	env := []string{}
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "CLAUDECODE=") {
+			env = append(env, e)
+		}
+	}
+	cmd.Env = env
+
+	// 分别捕获 stdout 和 stderr
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		LogError("[Agent-%s] 执行命令失败: %v, stderr: %s", w.config.Name, err, stderr.String())
+		return "", fmt.Errorf("执行命令失败: %w, stderr: %s", err, stderr.String())
+	}
+
+	stderrOutput := stderr.String()
+	stdoutOutput := stdout.String()
+
+	LogDebug("[Agent-%s] 命令执行成功，stdout长度: %d, stderr长度: %d", w.config.Name, len(stdoutOutput), len(stderrOutput))
+
+	// 如果是新会话，从 stdout 中提取 AI Session ID 并保存映射
+	if aiSessionID == "" && task.SessionID != "" {
+		// 从 stdout 中提取 AI Session ID（格式：SESSION_ID:xxx）
+		lines := strings.Split(stdoutOutput, "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "SESSION_ID:") {
+				extractedSessionID := strings.TrimSpace(strings.TrimPrefix(line, "SESSION_ID:"))
+				if extractedSessionID != "" {
+					// 保存映射到 Redis
+					mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
+					err := w.redisClient.Set(w.ctx, mappingKey, extractedSessionID, 0).Err()
+					if err != nil {
+						LogWarn("[Agent-%s] 保存 AI Session ID 映射失败: %v", w.config.Name, err)
+					} else {
+						LogInfo("[Agent-%s] ✓ 已保存 AI Session ID 映射: %s -> %s", w.config.Name, task.SessionID, extractedSessionID)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// 返回 stderr（Claude 的实际响应），过滤掉 SESSION_ID 行
+	result := strings.Builder{}
+	for _, line := range strings.Split(stderrOutput, "\n") {
+		if !strings.HasPrefix(line, "SESSION_ID:") {
+			result.WriteString(line)
+			result.WriteString("\n")
+		}
+	}
+
+	return strings.TrimSpace(result.String()), nil
 }
 
 // sendResult 将任务结果发送到结果队列

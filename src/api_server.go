@@ -181,7 +181,7 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	sessionID := fmt.Sprintf("sess_%s", uuid.New().String()[:8])
+	sessionID := uuid.New().String()
 	LogDebug("[API] 生成会话 ID: %s", sessionID)
 
 	// 为每个会话创建独立的调度器
