@@ -44,6 +44,7 @@ type SessionContext struct {
 	Mode          CollaborationMode // 新增：当前协作模式
 	ModeConfig    *ModeConfig       // 新增：模式配置
 	ModeState     *ModeState        // 新增：模式状态
+	WorkspaceID   string            // 新增：关联的工作区 ID
 	mu            sync.RWMutex
 }
 
@@ -76,11 +77,13 @@ type Cat struct {
 
 // Session 会话信息
 type Session struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Summary      string    `json:"summary"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	MessageCount int       `json:"messageCount"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Summary       string    `json:"summary"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	MessageCount  int       `json:"messageCount"`
+	WorkspaceID   string    `json:"workspaceId,omitempty"`   // 新增：关联的工作区 ID
+	WorkspacePath string    `json:"workspacePath,omitempty"` // 新增：工作区路径（用于显示）
 }
 
 // MessageStats 消息统计
@@ -273,12 +276,22 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, error) {
 		return nil, fmt.Errorf("会话不存在")
 	}
 
+	// 获取工作区路径
+	var workspacePath string
+	if ctx.WorkspaceID != "" && sm.workspaceManager != nil {
+		if workspace, err := sm.workspaceManager.GetWorkspace(ctx.WorkspaceID); err == nil {
+			workspacePath = workspace.Path
+		}
+	}
+
 	return &Session{
-		ID:           ctx.ID,
-		Name:         ctx.Name,
-		Summary:      ctx.Summary,
-		UpdatedAt:    ctx.UpdatedAt,
-		MessageCount: ctx.MessageCount,
+		ID:            ctx.ID,
+		Name:          ctx.Name,
+		Summary:       ctx.Summary,
+		UpdatedAt:     ctx.UpdatedAt,
+		MessageCount:  ctx.MessageCount,
+		WorkspaceID:   ctx.WorkspaceID,
+		WorkspacePath: workspacePath,
 	}, nil
 }
 
@@ -303,12 +316,22 @@ func (sm *SessionManager) UpdateSessionName(sessionID string, name string) (*Ses
 	}
 	sm.mu.Lock()
 
+	// 获取工作区路径
+	var workspacePath string
+	if ctx.WorkspaceID != "" && sm.workspaceManager != nil {
+		if workspace, err := sm.workspaceManager.GetWorkspace(ctx.WorkspaceID); err == nil {
+			workspacePath = workspace.Path
+		}
+	}
+
 	return &Session{
-		ID:           ctx.ID,
-		Name:         ctx.Name,
-		Summary:      ctx.Summary,
-		UpdatedAt:    ctx.UpdatedAt,
-		MessageCount: ctx.MessageCount,
+		ID:            ctx.ID,
+		Name:          ctx.Name,
+		Summary:       ctx.Summary,
+		UpdatedAt:     ctx.UpdatedAt,
+		MessageCount:  ctx.MessageCount,
+		WorkspaceID:   ctx.WorkspaceID,
+		WorkspacePath: workspacePath,
 	}, nil
 }
 
@@ -319,12 +342,22 @@ func (sm *SessionManager) ListSessions() []Session {
 
 	sessions := make([]Session, 0, len(sm.sessions))
 	for _, ctx := range sm.sessions {
+		// 获取工作区路径
+		var workspacePath string
+		if ctx.WorkspaceID != "" && sm.workspaceManager != nil {
+			if workspace, err := sm.workspaceManager.GetWorkspace(ctx.WorkspaceID); err == nil {
+				workspacePath = workspace.Path
+			}
+		}
+
 		sessions = append(sessions, Session{
-			ID:           ctx.ID,
-			Name:         ctx.Name,
-			Summary:      ctx.Summary,
-			UpdatedAt:    ctx.UpdatedAt,
-			MessageCount: ctx.MessageCount,
+			ID:            ctx.ID,
+			Name:          ctx.Name,
+			Summary:       ctx.Summary,
+			UpdatedAt:     ctx.UpdatedAt,
+			MessageCount:  ctx.MessageCount,
+			WorkspaceID:   ctx.WorkspaceID,
+			WorkspacePath: workspacePath,
 		})
 	}
 
@@ -479,7 +512,7 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 			// 发送任务到调度器
 			go func(agentCall AgentCall) {
 				LogInfo("[API] 准备发送任务到调度器 - Cat: %s", agentCall.AgentName)
-				taskID, err := ctx.Scheduler.SendTask(agentCall.AgentName, agentCall.Prompt, sessionID)
+				taskID, err := ctx.Scheduler.SendTaskWithWorkspace("铲屎官", agentCall.AgentName, agentCall.Prompt, sessionID, ctx.WorkspaceID)
 				if err != nil {
 					LogError("[API] 发送任务失败 - Cat: %s, Error: %v", agentCall.AgentName, err)
 				} else {
@@ -591,11 +624,36 @@ func (sm *SessionManager) handleGetSessions(c *gin.Context) {
 }
 
 func (sm *SessionManager) handleCreateSession(c *gin.Context) {
+	var req struct {
+		Name        string `json:"name"`
+		WorkspaceID string `json:"workspace_id"` // 新增：可选的工作区 ID
+	}
+	// 使用 ShouldBindJSON 而不是 BindJSON，允许空 body
+	_ = c.ShouldBindJSON(&req)
+
 	session, err := sm.CreateSession()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 如果提供了 workspace_id，更新会话
+	if req.WorkspaceID != "" {
+		sm.mu.Lock()
+		if ctx, exists := sm.sessions[session.ID]; exists {
+			ctx.WorkspaceID = req.WorkspaceID
+		}
+		sm.mu.Unlock()
+
+		// 保存到 Redis
+		sm.AutoSaveSession(session.ID)
+	}
+
+	// 如果提供了名称，更新会话名称
+	if req.Name != "" {
+		session, _ = sm.UpdateSessionName(session.ID, req.Name)
+	}
+
 	c.JSON(http.StatusOK, session)
 }
 
@@ -1111,7 +1169,7 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 		// 发送任务到调度器
 		go func(agentCall AgentCall) {
 			LogInfo("[API] 猫猫互相调用 - 准备发送任务: %s", agentCall.AgentName)
-			taskID, err := ctx.Scheduler.SendTask(agentCall.AgentName, agentCall.Prompt, task.SessionID)
+			taskID, err := ctx.Scheduler.SendTaskWithWorkspace("铲屎官", agentCall.AgentName, agentCall.Prompt, task.SessionID, ctx.WorkspaceID)
 			if err != nil {
 				LogError("[API] 猫猫互相调用 - 发送任务失败: %s, Error: %v", agentCall.AgentName, err)
 			} else {
