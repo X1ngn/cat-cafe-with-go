@@ -13,6 +13,7 @@ type SessionData struct {
 	ID           string              `json:"id"`
 	Name         string              `json:"name"`
 	Summary      string              `json:"summary"`
+	WorkspaceID  string              `json:"workspaceId"`  // 新增：关联的工作区 ID
 	CreatedAt    time.Time           `json:"createdAt"`
 	UpdatedAt    time.Time           `json:"updatedAt"`
 	MessageCount int                 `json:"messageCount"`
@@ -59,6 +60,7 @@ func (sm *SessionManager) SaveSession(sessionID string) error {
 		ID:           ctx.ID,
 		Name:         ctx.Name,
 		Summary:      ctx.Summary,
+		WorkspaceID:  ctx.WorkspaceID,  // 新增：保存工作区 ID
 		CreatedAt:    ctx.CreatedAt,
 		UpdatedAt:    ctx.UpdatedAt,
 		MessageCount: ctx.MessageCount,
@@ -129,6 +131,7 @@ func (sm *SessionManager) LoadSession(sessionID string) error {
 		ID:           data.ID,
 		Name:         data.Name,
 		Summary:      data.Summary,
+		WorkspaceID:  data.WorkspaceID,  // 新增：恢复工作区 ID
 		CreatedAt:    data.CreatedAt,
 		UpdatedAt:    data.UpdatedAt,
 		MessageCount: data.MessageCount,

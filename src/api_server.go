@@ -44,6 +44,7 @@ type SessionContext struct {
 	Mode          CollaborationMode // 新增：当前协作模式
 	ModeConfig    *ModeConfig       // 新增：模式配置
 	ModeState     *ModeState        // 新增：模式状态
+	WorkspaceID   string            // 新增：关联的工作区 ID
 	mu            sync.RWMutex
 }
 
@@ -591,11 +592,39 @@ func (sm *SessionManager) handleGetSessions(c *gin.Context) {
 }
 
 func (sm *SessionManager) handleCreateSession(c *gin.Context) {
+	var req struct {
+		Name        string `json:"name"`
+		WorkspaceID string `json:"workspace_id"` // 可选的工作区 ID
+	}
+	// 使用 ShouldBindJSON 而不是 BindJSON，允许空 body
+	_ = c.ShouldBindJSON(&req)
+
 	session, err := sm.CreateSession()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 如果提供了 workspace_id，更新会话
+	if req.WorkspaceID != "" {
+		sm.mu.Lock()
+		if ctx, exists := sm.sessions[session.ID]; exists {
+			ctx.WorkspaceID = req.WorkspaceID
+		}
+		sm.mu.Unlock()
+
+		// 保存到 Redis
+		sm.AutoSaveSession(session.ID)
+	}
+
+	// 如果提供了名称，更新会话名称
+	if req.Name != "" {
+		session, _ = sm.UpdateSessionName(session.ID, req.Name)
+	} else {
+		// 即使没有提供名称，也要重新获取会话以包含工作区信息
+		session, _ = sm.GetSession(session.ID)
+	}
+
 	c.JSON(http.StatusOK, session)
 }
 

@@ -46,6 +46,7 @@ type TaskMessage struct {
 	Content     string                 `json:"content"`
 	Result      string                 `json:"result,omitempty"`     // Agent 执行结果
 	SessionID   string                 `json:"session_id,omitempty"` // 关联的会话 ID
+	WorkspaceID string                 `json:"workspace_id,omitempty"` // 新增：关联的工作区 ID
 	RetryCount  int                    `json:"retry_count"`
 	MaxRetries  int                    `json:"max_retries"`
 	CreatedAt   time.Time              `json:"created_at"`
@@ -153,12 +154,13 @@ func (s *Scheduler) registerAgents() error {
 
 // SendTask 发送任务到指定 Agent
 func (s *Scheduler) SendTask(agentName, content, sessionID string) (string, error) {
-	return s.SendTaskFrom("铲屎官", agentName, content, sessionID)
+	return s.SendTaskWithWorkspace("铲屎官", agentName, content, sessionID, "")
 }
 
-// SendTaskFrom 从指定发送者发送任务到指定 Agent
-func (s *Scheduler) SendTaskFrom(from, agentName, content, sessionID string) (string, error) {
-	LogDebug("[Scheduler] 准备发送任务 - From: %s, To: %s, Content: %s, SessionID: %s", from, agentName, content, sessionID)
+// SendTaskWithWorkspace 发送任务到指定 Agent（带工作区 ID）
+func (s *Scheduler) SendTaskWithWorkspace(from, agentName, content, sessionID, workspaceID string) (string, error) {
+	LogDebug("[Scheduler] 准备发送任务 - From: %s, To: %s, Content: %s, SessionID: %s, WorkspaceID: %s",
+		from, agentName, content, sessionID, workspaceID)
 
 	agent, exists := s.agents[agentName]
 	if !exists {
@@ -177,14 +179,15 @@ func (s *Scheduler) SendTaskFrom(from, agentName, content, sessionID string) (st
 
 	// 创建任务消息
 	task := TaskMessage{
-		TaskID:     taskID,
-		AgentName:  agentName,
-		Content:    content,
-		SessionID:  sessionID,
-		RetryCount: 0,
-		MaxRetries: 3,
-		CreatedAt:  time.Now(),
-		Status:     "pending",
+		TaskID:      taskID,
+		AgentName:   agentName,
+		Content:     content,
+		SessionID:   sessionID,
+		WorkspaceID: workspaceID, // 新增：传递工作区 ID
+		RetryCount:  0,
+		MaxRetries:  3,
+		CreatedAt:   time.Now(),
+		Status:      "pending",
 	}
 
 	// 序列化任务

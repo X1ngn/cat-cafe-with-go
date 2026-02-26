@@ -1,19 +1,70 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { SessionCard } from './SessionCard';
-import { sessionAPI } from '@/services/api';
+import { sessionAPI, workspaceAPI } from '@/services/api';
+import { Workspace } from '@/types';
 
 export const Sidebar: React.FC = () => {
   const { sessions, currentSession, setCurrentSession, addSession, removeSession, updateSession } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
+  const [showWorkspaceDialog, setShowWorkspaceDialog] = useState(false);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>('');
+  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
+  const [newWorkspacePath, setNewWorkspacePath] = useState('');
+  const [newWorkspaceType, setNewWorkspaceType] = useState<'self' | 'external'>('external');
 
-  const handleNewSession = async () => {
+  // 加载工作区列表
+  useEffect(() => {
+    const loadWorkspaces = async () => {
+      try {
+        const response = await workspaceAPI.getWorkspaces();
+        setWorkspaces(response.data);
+      } catch (error) {
+        console.error('Failed to load workspaces:', error);
+      }
+    };
+    loadWorkspaces();
+  }, []);
+
+  const handleNewSession = () => {
+    // 始终显示工作区选择对话框
+    setShowWorkspaceDialog(true);
+  };
+
+  const createSession = async (workspaceId?: string) => {
     try {
-      const response = await sessionAPI.createSession();
+      const response = await sessionAPI.createSession(workspaceId);
       addSession(response.data);
       setCurrentSession(response.data);
+      setShowWorkspaceDialog(false);
+      setSelectedWorkspaceId('');
     } catch (error) {
       console.error('Failed to create session:', error);
+    }
+  };
+
+  const handleWorkspaceDialogSubmit = () => {
+    createSession(selectedWorkspaceId || undefined);
+  };
+
+  const handleCreateWorkspace = async () => {
+    if (!newWorkspacePath.trim()) {
+      alert('请输入工作区路径');
+      return;
+    }
+
+    try {
+      const response = await workspaceAPI.createWorkspace(newWorkspacePath.trim(), newWorkspaceType);
+      const newWorkspace = response.data;
+      setWorkspaces([...workspaces, newWorkspace]);
+      setSelectedWorkspaceId(newWorkspace.id);
+      setShowCreateWorkspace(false);
+      setNewWorkspacePath('');
+      alert('工作区创建成功！');
+    } catch (error) {
+      console.error('Failed to create workspace:', error);
+      alert('创建工作区失败，请检查路径是否有效');
     }
   };
 
@@ -127,6 +178,157 @@ export const Sidebar: React.FC = () => {
           ))
         )}
       </div>
+
+      {/* 工作区选择对话框 */}
+      {showWorkspaceDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-[500px] shadow-xl max-h-[80vh] overflow-y-auto">
+            <h3 className="text-lg font-bold mb-4">选择工作区</h3>
+
+            {!showCreateWorkspace ? (
+              <>
+                <div className="mb-4 max-h-[300px] overflow-y-auto space-y-2">
+                  <label className="flex items-center p-3 border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="workspace"
+                      value=""
+                      checked={selectedWorkspaceId === ''}
+                      onChange={(e) => setSelectedWorkspaceId(e.target.value)}
+                      className="mr-3"
+                    />
+                    <div>
+                      <div className="font-medium">无工作区</div>
+                      <div className="text-xs text-gray-500">在当前目录下工作</div>
+                    </div>
+                  </label>
+                  {workspaces.map((workspace) => (
+                    <label
+                      key={workspace.id}
+                      className="flex items-center p-3 border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer"
+                    >
+                      <input
+                        type="radio"
+                        name="workspace"
+                        value={workspace.id}
+                        checked={selectedWorkspaceId === workspace.id}
+                        onChange={(e) => setSelectedWorkspaceId(e.target.value)}
+                        className="mr-3"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{workspace.path}</div>
+                        <div className="text-xs text-gray-500">
+                          {workspace.type === 'self' ? '本项目' : '外部项目'}
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowCreateWorkspace(true)}
+                  className="w-full mb-4 px-4 py-2 border-2 border-dashed border-gray-300 text-gray-600 rounded-lg hover:border-primary hover:text-primary transition-colors"
+                >
+                  + 创建新工作区
+                </button>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowWorkspaceDialog(false);
+                      setSelectedWorkspaceId('');
+                    }}
+                    className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleWorkspaceDialogSubmit}
+                    className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-opacity-90 transition-colors"
+                  >
+                    创建对话
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    工作区路径
+                  </label>
+                  <input
+                    type="text"
+                    value={newWorkspacePath}
+                    onChange={(e) => setNewWorkspacePath(e.target.value)}
+                    placeholder="/path/to/your/project"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">请输入绝对路径</p>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    工作区类型
+                  </label>
+                  <div className="space-y-2">
+                    <label className="flex items-center p-3 border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="workspaceType"
+                        value="external"
+                        checked={newWorkspaceType === 'external'}
+                        onChange={(e) => setNewWorkspaceType(e.target.value as 'external')}
+                        className="mr-3"
+                      />
+                      <div>
+                        <div className="font-medium">外部项目</div>
+                        <div className="text-xs text-gray-500">其他项目的工作区</div>
+                      </div>
+                    </label>
+                    <label className="flex items-center p-3 border border-gray-300 rounded-lg hover:bg-gray-50 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="workspaceType"
+                        value="self"
+                        checked={newWorkspaceType === 'self'}
+                        onChange={(e) => setNewWorkspaceType(e.target.value as 'self')}
+                        className="mr-3"
+                      />
+                      <div>
+                        <div className="font-medium">本项目</div>
+                        <div className="text-xs text-gray-500">猫猫咖啡屋项目本身</div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateWorkspace(false);
+                      setNewWorkspacePath('');
+                    }}
+                    className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    返回
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCreateWorkspace}
+                    className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-opacity-90 transition-colors"
+                  >
+                    创建工作区
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

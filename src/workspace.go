@@ -94,9 +94,15 @@ func (wm *WorkspaceManager) CreateWorkspace(path string, wsType WorkspaceType) (
 	wm.mu.Lock()
 	defer wm.mu.Unlock()
 
+	// 转换为绝对路径
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("无法解析路径: %w", err)
+	}
+
 	// 验证路径
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, fmt.Errorf("路径不存在: %s", path)
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("路径不存在: %s", absPath)
 	}
 
 	workspaceID := fmt.Sprintf("ws_%s", uuid.New().String()[:8])
@@ -118,7 +124,7 @@ func (wm *WorkspaceManager) CreateWorkspace(path string, wsType WorkspaceType) (
 
 	workspace := &Workspace{
 		ID:          workspaceID,
-		Path:        path,
+		Path:        absPath, // 使用绝对路径
 		Type:        wsType,
 		BuildCmd:    buildCmd,
 		TestCmd:     testCmd,
@@ -136,7 +142,7 @@ func (wm *WorkspaceManager) CreateWorkspace(path string, wsType WorkspaceType) (
 		LogError("[Workspace] 保存工作区到 Redis 失败: %v", err)
 	}
 
-	LogInfo("[Workspace] 工作区已创建: %s (%s)", workspaceID, path)
+	LogInfo("[Workspace] 工作区已创建: %s (%s)", workspaceID, absPath)
 	return workspace, nil
 }
 

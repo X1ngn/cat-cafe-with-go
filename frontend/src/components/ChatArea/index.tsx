@@ -90,9 +90,22 @@ export const ChatArea: React.FC = () => {
 
   return (
     <div className="flex-1 bg-white flex flex-col">
+      {/* 工作区信息栏 */}
+      {currentSession.workspacePath && (
+        <div className="px-8 pt-4 pb-2">
+          <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
+            <span className="text-blue-600">📁</span>
+            <span className="font-medium text-blue-700">工作区:</span>
+            <span className="truncate" title={currentSession.workspacePath}>
+              {currentSession.workspacePath}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* 模式状态栏 */}
       {sessionMode && (
-        <div className="px-8 pt-4">
+        <div className="px-8 pt-2">
           <ModeStatusBar mode={sessionMode.mode} />
         </div>
       )}
