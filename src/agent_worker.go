@@ -199,7 +199,7 @@ func (w *AgentWorker) handleMessage(message redis.XMessage) error {
 
 // executeTask 执行任务
 func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
-	LogDebug("[Agent-%s] 开始执行任务: %s", w.config.Name, task.TaskID)
+	LogDebug("[Agent-%s] 开始执行任务: %s, SessionID: %s", w.config.Name, task.TaskID, task.SessionID)
 	LogDebug("[Agent-%s] 执行命令: %s", w.config.Name, w.config.ExecCmd)
 
 	// 查询工作区路径

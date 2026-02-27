@@ -16,6 +16,7 @@ kill_port() {
 
 # 停止 API 服务器 (端口 8081)
 kill_port 8080 "API 服务器"
+kill_port 9001 "API 服务器"
 
 # 从 PID 文件读取并停止 Agent
 if [ -f data/.agent1.pid ]; then
