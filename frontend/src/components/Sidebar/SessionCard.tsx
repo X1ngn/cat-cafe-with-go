@@ -89,6 +89,11 @@ export const SessionCard: React.FC<SessionCardProps> = ({
           <div className="flex-1 min-w-0">
             <h3 className="font-bold text-base mb-2">{session.name}</h3>
             <p className="text-xs text-gray-500 mb-1">{formatTime(session.updatedAt)}</p>
+            {session.workspacePath && (
+              <p className="text-xs text-blue-600 mb-1 truncate" title={session.workspacePath}>
+                📁 {session.workspacePath}
+              </p>
+            )}
             <p className="text-xs text-gray-600 truncate">{session.summary}</p>
           </div>
 

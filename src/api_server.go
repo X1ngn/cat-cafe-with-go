@@ -44,6 +44,7 @@ type SessionContext struct {
 	Mode          CollaborationMode // 新增：当前协作模式
 	ModeConfig    *ModeConfig       // 新增：模式配置
 	ModeState     *ModeState        // 新增：模式状态
+	WorkspaceID   string            // 新增：关联的工作区 ID
 	mu            sync.RWMutex
 }
 
@@ -76,11 +77,13 @@ type Cat struct {
 
 // Session 会话信息
 type Session struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Summary      string    `json:"summary"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	MessageCount int       `json:"messageCount"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Summary       string    `json:"summary"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	MessageCount  int       `json:"messageCount"`
+	WorkspaceID   string    `json:"workspaceId,omitempty"`
+	WorkspacePath string    `json:"workspacePath,omitempty"`
 }
 
 // MessageStats 消息统计
@@ -255,11 +258,13 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 
 	LogDebug("[API] 会话创建完成: %s", sessionID)
 	return &Session{
-		ID:           ctx.ID,
-		Name:         ctx.Name,
-		Summary:      ctx.Summary,
-		UpdatedAt:    ctx.UpdatedAt,
-		MessageCount: ctx.MessageCount,
+		ID:            ctx.ID,
+		Name:          ctx.Name,
+		Summary:       ctx.Summary,
+		UpdatedAt:     ctx.UpdatedAt,
+		MessageCount:  ctx.MessageCount,
+		WorkspaceID:   ctx.WorkspaceID,
+		WorkspacePath: sm.getWorkspacePath(ctx.WorkspaceID),
 	}, nil
 }
 
@@ -274,11 +279,13 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, error) {
 	}
 
 	return &Session{
-		ID:           ctx.ID,
-		Name:         ctx.Name,
-		Summary:      ctx.Summary,
-		UpdatedAt:    ctx.UpdatedAt,
-		MessageCount: ctx.MessageCount,
+		ID:            ctx.ID,
+		Name:          ctx.Name,
+		Summary:       ctx.Summary,
+		UpdatedAt:     ctx.UpdatedAt,
+		MessageCount:  ctx.MessageCount,
+		WorkspaceID:   ctx.WorkspaceID,
+		WorkspacePath: sm.getWorkspacePath(ctx.WorkspaceID),
 	}, nil
 }
 
@@ -304,12 +311,26 @@ func (sm *SessionManager) UpdateSessionName(sessionID string, name string) (*Ses
 	sm.mu.Lock()
 
 	return &Session{
-		ID:           ctx.ID,
-		Name:         ctx.Name,
-		Summary:      ctx.Summary,
-		UpdatedAt:    ctx.UpdatedAt,
-		MessageCount: ctx.MessageCount,
+		ID:            ctx.ID,
+		Name:          ctx.Name,
+		Summary:       ctx.Summary,
+		UpdatedAt:     ctx.UpdatedAt,
+		MessageCount:  ctx.MessageCount,
+		WorkspaceID:   ctx.WorkspaceID,
+		WorkspacePath: sm.getWorkspacePath(ctx.WorkspaceID),
 	}, nil
+}
+
+// getWorkspacePath 根据 WorkspaceID 获取工作区路径
+func (sm *SessionManager) getWorkspacePath(workspaceID string) string {
+	if workspaceID == "" || sm.workspaceManager == nil {
+		return ""
+	}
+	ws, err := sm.workspaceManager.GetWorkspace(workspaceID)
+	if err != nil {
+		return ""
+	}
+	return ws.Path
 }
 
 // ListSessions 列出所有会话
@@ -320,11 +341,13 @@ func (sm *SessionManager) ListSessions() []Session {
 	sessions := make([]Session, 0, len(sm.sessions))
 	for _, ctx := range sm.sessions {
 		sessions = append(sessions, Session{
-			ID:           ctx.ID,
-			Name:         ctx.Name,
-			Summary:      ctx.Summary,
-			UpdatedAt:    ctx.UpdatedAt,
-			MessageCount: ctx.MessageCount,
+			ID:            ctx.ID,
+			Name:          ctx.Name,
+			Summary:       ctx.Summary,
+			UpdatedAt:     ctx.UpdatedAt,
+			MessageCount:  ctx.MessageCount,
+			WorkspaceID:   ctx.WorkspaceID,
+			WorkspacePath: sm.getWorkspacePath(ctx.WorkspaceID),
 		})
 	}
 
@@ -591,11 +614,39 @@ func (sm *SessionManager) handleGetSessions(c *gin.Context) {
 }
 
 func (sm *SessionManager) handleCreateSession(c *gin.Context) {
+	var req struct {
+		Name        string `json:"name"`
+		WorkspaceID string `json:"workspace_id"` // 可选的工作区 ID
+	}
+	// 使用 ShouldBindJSON 而不是 BindJSON，允许空 body
+	_ = c.ShouldBindJSON(&req)
+
 	session, err := sm.CreateSession()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 如果提供了 workspace_id，更新会话
+	if req.WorkspaceID != "" {
+		sm.mu.Lock()
+		if ctx, exists := sm.sessions[session.ID]; exists {
+			ctx.WorkspaceID = req.WorkspaceID
+		}
+		sm.mu.Unlock()
+
+		// 保存到 Redis
+		sm.AutoSaveSession(session.ID)
+	}
+
+	// 如果提供了名称，更新会话名称
+	if req.Name != "" {
+		session, _ = sm.UpdateSessionName(session.ID, req.Name)
+	} else {
+		// 即使没有提供名称，也要重新获取会话以包含工作区信息
+		session, _ = sm.GetSession(session.ID)
+	}
+
 	c.JSON(http.StatusOK, session)
 }
 

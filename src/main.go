@@ -121,6 +121,12 @@ func main() {
 			os.Exit(1)
 		}
 
+		// 创建 WorkspaceManager
+		workspaceManager := NewWorkspaceManager(
+			scheduler.redisClient,
+			scheduler.ctx,
+		)
+
 		// 获取 Agent 配置
 		var agentConfig *AgentConfig
 		for _, agent := range scheduler.ListAgents() {
@@ -149,6 +155,7 @@ func main() {
 			scheduler.config.Redis.Addr,
 			scheduler.config.Redis.Password,
 			scheduler.config.Redis.DB,
+			workspaceManager, // 传递 WorkspaceManager
 		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "创建 Agent 工作进程失败: %v\n", err)

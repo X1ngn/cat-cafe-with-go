@@ -21,6 +21,8 @@ export interface Session {
   summary: string;
   updatedAt: Date;
   messageCount: number;
+  workspaceId?: string; // 新增：关联的工作区 ID
+  workspacePath?: string; // 新增：工作区路径（用于显示）
 }
 
 export interface MessageStats {
@@ -59,4 +61,18 @@ export interface SessionMode {
   description: string;
   config: ModeConfig;
   state: ModeState;
+}
+
+// 工作区相关类型
+export interface Workspace {
+  id: string;
+  path: string;
+  type: 'self' | 'external';
+  buildCmd?: string;
+  testCmd?: string;
+  startCmd?: string;
+  healthCheck?: string;
+  state: string;
+  createdAt: Date;
+  updatedAt: Date;
 }

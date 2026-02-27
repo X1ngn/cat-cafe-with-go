@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Cat, Message, Session, MessageStats, CallHistory, ModeInfo, SessionMode } from '@/types';
+import { Cat, Message, Session, MessageStats, CallHistory, ModeInfo, SessionMode, Workspace } from '@/types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -11,7 +11,8 @@ export const sessionAPI = {
   getSessions: () => api.get<Session[]>('/sessions'),
 
   // 创建新会话
-  createSession: () => api.post<Session>('/sessions'),
+  createSession: (workspaceId?: string, name?: string) =>
+    api.post<Session>('/sessions', { workspace_id: workspaceId, name }),
 
   // 获取会话详情
   getSession: (sessionId: string) => api.get<Session>(`/sessions/${sessionId}`),
@@ -66,6 +67,25 @@ export const modeAPI = {
   // 切换会话模式
   switchMode: (sessionId: string, mode: string, config?: Record<string, any>) =>
     api.put<SessionMode>(`/sessions/${sessionId}/mode`, { mode, modeConfig: config || {} }),
+};
+
+export const workspaceAPI = {
+  // 获取所有工作区
+  getWorkspaces: () => api.get<Workspace[]>('/workspaces'),
+
+  // 创建工作区
+  createWorkspace: (path: string, type: 'self' | 'external') =>
+    api.post<Workspace>('/workspaces', { path, type }),
+
+  // 获取工作区详情
+  getWorkspace: (workspaceId: string) => api.get<Workspace>(`/workspaces/${workspaceId}`),
+
+  // 更新工作区
+  updateWorkspace: (workspaceId: string, data: Partial<Workspace>) =>
+    api.put<Workspace>(`/workspaces/${workspaceId}`, data),
+
+  // 删除工作区
+  deleteWorkspace: (workspaceId: string) => api.delete(`/workspaces/${workspaceId}`),
 };
 
 export default api;
