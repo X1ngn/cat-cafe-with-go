@@ -41,10 +41,8 @@ func main() {
 	}
 
 	options := AgentOptions{
-		Model:        model,
-		AllowedTools: "Read,Edit,Glob,Grep",
-		ApprovalMode: "auto_edit",
-		SessionID:    sessionID,
+		Model:     model,
+		SessionID: sessionID,
 	}
 
 	_, _, err := InvokeCLI("gemini", prompt, options)
