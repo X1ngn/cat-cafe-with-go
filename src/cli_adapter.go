@@ -17,17 +17,11 @@ func InvokeAgent(cliType, prompt, aiSessionID, workDir string) (string, string, 
 func getDefaultOptions(cliType string) AgentOptions {
 	switch cliType {
 	case "claude":
-		return AgentOptions{
-			AllowedTools:   "Read,Edit,Glob,Grep",
-			PermissionMode: "acceptEdits",
-		}
+		return AgentOptions{}
 	case "codex":
 		return AgentOptions{}
 	case "gemini":
-		return AgentOptions{
-			AllowedTools: "Read,Edit,Glob,Grep",
-			ApprovalMode: "auto_edit",
-		}
+		return AgentOptions{}
 	default:
 		return AgentOptions{}
 	}
