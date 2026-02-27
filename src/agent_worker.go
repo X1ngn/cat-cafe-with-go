@@ -385,6 +385,11 @@ func (w *AgentWorker) parseAndDispatchTasks(output string, currentTask *TaskMess
 			continue
 		}
 
+		// 跳过自己调用自己，防止无限循环
+		if targetAgent == w.config.Name {
+			continue
+		}
+
 		// 特殊处理 @铲屎官
 		if targetAgent == "铲屎官" {
 			fmt.Printf("📢 %s 完成工作，等待用户输入\n", w.config.Name)
