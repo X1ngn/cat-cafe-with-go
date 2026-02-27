@@ -4,7 +4,24 @@
 
 echo "🛑 停止猫猫咖啡屋服务..."
 
-# 杀掉监听端口的进程
+# 杀掉所有 cat-cafe 进程（API 服务器 + Agent Worker）
+PIDS=$(pgrep -f './bin/cat-cafe' 2>/dev/null)
+if [ -n "$PIDS" ]; then
+    echo "$PIDS" | xargs kill 2>/dev/null
+    echo "✓ 已停止所有 cat-cafe 进程"
+    # 等待进程退出
+    sleep 1
+    # 如果还有残留，强制杀掉
+    REMAINING=$(pgrep -f './bin/cat-cafe' 2>/dev/null)
+    if [ -n "$REMAINING" ]; then
+        echo "$REMAINING" | xargs kill -9 2>/dev/null
+        echo "✓ 已强制停止残留进程"
+    fi
+else
+    echo "  没有运行中的 cat-cafe 进程"
+fi
+
+# 杀掉监听端口的进程（兜底）
 kill_port() {
     local port=$1
     local name=$2
@@ -14,30 +31,12 @@ kill_port() {
     fi
 }
 
-# 停止 API 服务器 (端口 8081)
 kill_port 8080 "API 服务器"
 kill_port 9001 "API 服务器"
 
-# 从 PID 文件读取并停止 Agent
-if [ -f data/.agent1.pid ]; then
-    AGENT1_PID=$(cat data/.agent1.pid)
-    kill $AGENT1_PID 2>/dev/null && echo "✓ 花花已停止"
-    rm -f data/.agent1.pid
-fi
-
-if [ -f data/.agent2.pid ]; then
-    AGENT2_PID=$(cat data/.agent2.pid)
-    kill $AGENT2_PID 2>/dev/null && echo "✓ 薇薇已停止"
-    rm -f data/.agent2.pid
-fi
-
-if [ -f data/.agent3.pid ]; then
-    AGENT3_PID=$(cat data/.agent3.pid)
-    kill $AGENT3_PID 2>/dev/null && echo "✓ 小乔已停止"
-    rm -f data/.agent3.pid
-fi
-
-# 清理旧的 PID 文件（如果存在）
+# 清理 PID 文件
+rm -f logs/.api.pid logs/.agent1.pid logs/.agent2.pid logs/.agent3.pid
+rm -f data/.api.pid data/.agent1.pid data/.agent2.pid data/.agent3.pid
 rm -f .api.pid .agent1.pid .agent2.pid .agent3.pid
 
 echo "✅ 所有服务已停止"

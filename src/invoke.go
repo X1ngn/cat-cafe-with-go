@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -19,6 +18,7 @@ type AgentOptions struct {
 	PermissionMode string // 用于 Claude CLI
 	ApprovalMode   string // 用于 Gemini CLI
 	SessionID      string // 用于 --resume
+	WorkDir        string // 工作目录
 }
 
 // InvokeCLI 调用指定的 CLI 工具并处理其流式输出。
@@ -76,7 +76,12 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 
 	cmd := exec.Command(cliName, args...)
 
-	// 移除 CLAUDECODE 环境变量，避免嵌套会话冲突
+	// 设置工作目录
+	if options.WorkDir != "" {
+		cmd.Dir = options.WorkDir
+	}
+
+	// 清理 CLAUDECODE 环境变量，避免嵌套会话错误
 	env := []string{}
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, "CLAUDECODE=") {
@@ -135,9 +140,8 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stdout)
-		// 增加缓冲区大小到 1MB，避免 "token too long" 错误
-		buf := make([]byte, 0, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
+		// 增大 buffer 到 1MB，避免长行被截断导致响应丢失
+		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -162,7 +166,6 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 						for _, contentBlock := range event.Message.Content {
 							if contentBlock.Type == "text" {
 								assistantResponse += contentBlock.Text
-								fmt.Fprint(os.Stderr, contentBlock.Text) // 输出到 stderr
 							}
 						}
 					}
@@ -179,7 +182,6 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 						sessionID = event.SessionID
 					} else if event.Type == "message" && event.Role == "assistant" && event.Content != "" {
 						assistantResponse += event.Content
-						fmt.Fprint(os.Stderr, event.Content) // 输出到 stderr
 					}
 				}
 			case "codex":
@@ -199,7 +201,6 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 						sessionID = event.SessionID
 					} else if event.Type == "item.completed" && event.Item.Type == "agent_message" && event.Item.Text != "" {
 						assistantResponse += event.Item.Text
-						fmt.Fprint(os.Stderr, event.Item.Text) // 输出到 stderr
 					}
 				}
 			}
@@ -220,32 +221,4 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	}
 
 	return assistantResponse, sessionID, nil
-}
-
-// getSessionFilePath 返回用于存储给定 CLI 工具的会话 ID 的文件路径。
-func getSessionFilePath(cliName string) string {
-	return filepath.Join(".", fmt.Sprintf(".%s_session", cliName))
-}
-
-// LoadSessionID 从文件中加载指定 CLI 工具的会话 ID。
-func LoadSessionID(cliName string) (string, error) {
-	filePath := getSessionFilePath(cliName)
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil // 文件不存在不是错误，表示没有会话
-		}
-		return "", fmt.Errorf("无法读取会话文件 %s: %w", filePath, err)
-	}
-	return strings.TrimSpace(string(content)), nil
-}
-
-// SaveSessionID 将指定 CLI 工具的会话 ID 保存到文件中。
-func SaveSessionID(cliName, sessionID string) error {
-	filePath := getSessionFilePath(cliName)
-	err := os.WriteFile(filePath, []byte(sessionID), 0644)
-	if err != nil {
-		return fmt.Errorf("无法写入会话文件 %s: %w", filePath, err)
-	}
-	return nil
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -199,8 +198,8 @@ func (w *AgentWorker) handleMessage(message redis.XMessage) error {
 
 // executeTask 执行任务
 func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
-	LogDebug("[Agent-%s] 开始执行任务: %s, SessionID: %s", w.config.Name, task.TaskID, task.SessionID)
-	LogDebug("[Agent-%s] 执行命令: %s", w.config.Name, w.config.ExecCmd)
+	LogDebug("[Agent-%s] 开始执行任务: %s", w.config.Name, task.TaskID)
+	LogDebug("[Agent-%s] CLI 类型: %s", w.config.Name, w.config.CLIType)
 
 	// 查询工作区路径
 	var workDir string
@@ -214,10 +213,22 @@ func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
 		}
 	}
 
-	// 组合系统提示词和用户内容
-	fullPrompt := fmt.Sprintf("%s\n\n========================================\n\n用户需求：\n%s", w.systemPrompt, task.Content)
+	// 获取会话历史消息
+	chatHistory := w.getSessionHistory(task.SessionID)
 
-	// 查询 AI Session ID 映射
+	// 组合系统提示词、对话历史和当前任务
+	var fullPrompt string
+	if chatHistory != "" {
+		fullPrompt = fmt.Sprintf("%s\n\n========================================\n\n【对话历史】\n%s\n========================================\n\n🎯 你是%s，请回应以下消息：\n%s\n\n请结合上面的对话历史来完成任务。", w.systemPrompt, chatHistory, w.config.Name, task.Content)
+	} else {
+		fullPrompt = fmt.Sprintf("%s\n\n========================================\n\n用户需求：\n%s", w.systemPrompt, task.Content)
+	}
+
+	// 打印完整 prompt 到日志，用于调试上下文超长问题
+	// LogInfo("[Agent-%s] === fullPrompt 长度: %d 字符 ===", w.config.Name, len(fullPrompt))
+	// LogInfo("[Agent-%s] === fullPrompt 内容开始 ===\n%s\n=== fullPrompt 内容结束 ===", w.config.Name, fullPrompt)
+
+	// 从 Redis 获取 AI Session ID 映射
 	var aiSessionID string
 	if task.SessionID != "" {
 		mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
@@ -229,86 +240,89 @@ func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
 		}
 	}
 
-	// 执行命令，传递 prompt 和 AI session ID
-	var cmd *exec.Cmd
-	if aiSessionID != "" {
-		// 如果有 AI SessionID，使用 --resume 参数传递（必须在 prompt 之前）
-		cmd = exec.CommandContext(w.ctx, w.config.ExecCmd, "--resume", aiSessionID, fullPrompt)
-		LogDebug("[Agent-%s] 使用 AI SessionID: %s", w.config.Name, aiSessionID)
-	} else {
-		// 没有 AI SessionID，只传递 prompt，让 AI 创建新会话
-		cmd = exec.CommandContext(w.ctx, w.config.ExecCmd, fullPrompt)
-		LogDebug("[Agent-%s] 创建新 AI 会话", w.config.Name)
-	}
-
-	// 设置工作目录
-	if workDir != "" {
-		// 验证路径是否存在
-		if _, err := os.Stat(workDir); os.IsNotExist(err) {
-			LogWarn("[Agent-%s] 工作区路径不存在: %s", w.config.Name, workDir)
-		} else {
-			cmd.Dir = workDir
-			LogDebug("[Agent-%s] 已设置工作目录: %s", w.config.Name, workDir)
-		}
-	}
-
-	// 取消设置 CLAUDECODE 环境变量，避免嵌套会话错误
-	env := []string{}
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "CLAUDECODE=") {
-			env = append(env, e)
-		}
-	}
-	cmd.Env = env
-
-	// 分别捕获 stdout 和 stderr
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	// 直接调用 InvokeAgent，不再通过 exec.Command 调用 minimal-* 二进制
+	response, newSessionID, err := InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)
 	if err != nil {
-		LogError("[Agent-%s] 执行命令失败: %v, stderr: %s", w.config.Name, err, stderr.String())
-		return "", fmt.Errorf("执行命令失败: %w, stderr: %s", err, stderr.String())
+		LogError("[Agent-%s] 调用 CLI 失败: %v", w.config.Name, err)
+		return "", fmt.Errorf("调用 %s CLI 失败: %w", w.config.CLIType, err)
 	}
 
-	stderrOutput := stderr.String()
-	stdoutOutput := stdout.String()
+	LogDebug("[Agent-%s] CLI 返回 - response长度: %d, newSessionID: %s", w.config.Name, len(response), newSessionID)
 
-	LogDebug("[Agent-%s] 命令执行成功，stdout长度: %d, stderr长度: %d", w.config.Name, len(stdoutOutput), len(stderrOutput))
+	// 保存新的 AI Session ID 映射到 Redis
+	if newSessionID != "" && newSessionID != aiSessionID && task.SessionID != "" {
+		mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
+		if err := w.redisClient.Set(w.ctx, mappingKey, newSessionID, 0).Err(); err != nil {
+			LogWarn("[Agent-%s] 保存 AI Session ID 映射失败: %v", w.config.Name, err)
+		} else {
+			LogInfo("[Agent-%s] ✓ 已保存 AI Session ID 映射: %s -> %s", w.config.Name, task.SessionID, newSessionID)
+		}
+	}
 
-	// 如果是新会话，从 stdout 中提取 AI Session ID 并保存映射
-	if aiSessionID == "" && task.SessionID != "" {
-		// 从 stdout 中提取 AI Session ID（格式：SESSION_ID:xxx）
-		lines := strings.Split(stdoutOutput, "\n")
-		for _, line := range lines {
-			if strings.HasPrefix(line, "SESSION_ID:") {
-				extractedSessionID := strings.TrimSpace(strings.TrimPrefix(line, "SESSION_ID:"))
-				if extractedSessionID != "" {
-					// 保存映射到 Redis
-					mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
-					err := w.redisClient.Set(w.ctx, mappingKey, extractedSessionID, 0).Err()
-					if err != nil {
-						LogWarn("[Agent-%s] 保存 AI Session ID 映射失败: %v", w.config.Name, err)
-					} else {
-						LogInfo("[Agent-%s] ✓ 已保存 AI Session ID 映射: %s -> %s", w.config.Name, task.SessionID, extractedSessionID)
-					}
-					break
-				}
+	return response, nil
+}
+
+// getSessionHistory 从 Redis 获取会话历史消息并格式化
+func (w *AgentWorker) getSessionHistory(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+
+	key := "session:" + sessionID
+	jsonData, err := w.redisClient.Get(w.ctx, key).Result()
+	if err != nil {
+		LogDebug("[Agent-%s] 获取会话历史失败: %v", w.config.Name, err)
+		return ""
+	}
+
+	var data SessionData
+	if err := json.Unmarshal([]byte(jsonData), &data); err != nil {
+		LogWarn("[Agent-%s] 解析会话历史失败: %v", w.config.Name, err)
+		return ""
+	}
+
+	if len(data.Messages) == 0 {
+		return ""
+	}
+
+	// 只取最近 20 条消息，避免上下文过长
+	const maxMessages = 20
+	// 每条猫猫消息最多保留 500 字符，避免长回复撑爆上下文
+	const maxContentLen = 500
+
+	messages := data.Messages
+	if len(messages) > maxMessages {
+		messages = messages[len(messages)-maxMessages:]
+	}
+
+	// 格式化历史消息，带角色标注
+	var history strings.Builder
+	for _, msg := range messages {
+		content := msg.Content
+		switch msg.Type {
+		case "user":
+			name := "用户"
+			if msg.Sender != nil {
+				name = msg.Sender.Name
 			}
+			history.WriteString(fmt.Sprintf("[%s] %s\n", name, content))
+		case "cat":
+			name := "猫猫"
+			if msg.Sender != nil {
+				name = msg.Sender.Name
+			}
+			// 猫猫回复可能很长，做截断
+			if len(content) > maxContentLen {
+				content = content[:maxContentLen] + "...(已截断)"
+			}
+			history.WriteString(fmt.Sprintf("[%s] %s\n", name, content))
+		case "system":
+			history.WriteString(fmt.Sprintf("[系统] %s\n", msg.Content))
 		}
 	}
 
-	// 返回 stderr（AI 的实际响应），过滤掉 SESSION_ID 行
-	result := strings.Builder{}
-	for _, line := range strings.Split(stderrOutput, "\n") {
-		if !strings.HasPrefix(line, "SESSION_ID:") {
-			result.WriteString(line)
-			result.WriteString("\n")
-		}
-	}
-
-	return strings.TrimSpace(result.String()), nil
+	LogDebug("[Agent-%s] 已加载 %d/%d 条历史消息", w.config.Name, len(messages), len(data.Messages))
+	return strings.TrimSpace(history.String())
 }
 
 // sendResult 将任务结果发送到结果队列
@@ -368,6 +382,11 @@ func (w *AgentWorker) parseAndDispatchTasks(output string, currentTask *TaskMess
 		taskContent := strings.TrimSpace(parts[1])
 
 		if taskContent == "" {
+			continue
+		}
+
+		// 跳过自己调用自己，防止无限循环
+		if targetAgent == w.config.Name {
 			continue
 		}
 

@@ -15,6 +15,7 @@ import (
 type AgentConfig struct {
 	Name             string `yaml:"name"`
 	Pipe             string `yaml:"pipe"`
+	CLIType          string `yaml:"cli_type"`
 	ExecCmd          string `yaml:"exec_cmd"`
 	SystemPromptPath string `yaml:"system_prompt_path"`
 	Avatar           string `yaml:"avatar"`
