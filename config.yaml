@@ -5,6 +5,7 @@ agents:
     system_prompt_path: "prompts/calico_cat.md"
     dev_prompt_path: "prompts/dev_sop.md"
     avatar: "/images/sanhua.png"
+    context_mode: "orchestrated"
 
   - name: "薇薇"
     pipe: "pipe_weiwei"
@@ -12,6 +13,7 @@ agents:
     system_prompt_path: "prompts/lihua_cat.md"
     dev_prompt_path: "prompts/dev_sop.md"
     avatar: "/images/weiwei.png"
+    context_mode: "orchestrated"
 
   - name: "小乔"
     pipe: "pipe_xiaoqiao"
@@ -19,6 +21,7 @@ agents:
     system_prompt_path: "prompts/silver_cat.md"
     dev_prompt_path: "prompts/dev_sop.md"
     avatar: "/images/xiaoqiao.png"
+    context_mode: "orchestrated"
 
 redis:
   addr: "localhost:6379"

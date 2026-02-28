@@ -323,6 +323,11 @@ func (w *AgentWorker) getSessionHistory(sessionID string) string {
 		return ""
 	}
 
+	// 从磁盘重新加载最新数据（跨进程同步）
+	if err := w.chainManager.ReloadThread(sessionID); err != nil {
+		LogDebug("[Agent-%s] 重新加载 Thread 失败: %v", w.config.Name, err)
+	}
+
 	events, err := w.chainManager.GetAllEvents(sessionID)
 	if err != nil || len(events) == 0 {
 		return ""
