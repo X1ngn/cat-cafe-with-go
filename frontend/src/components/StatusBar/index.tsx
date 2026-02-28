@@ -5,6 +5,7 @@ import { wsService } from '@/services/websocket';
 import { Avatar } from '@/components/common/Avatar';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { MessageStats, CallHistory } from '@/types';
+import { SessionChainPanel } from './SessionChainPanel';
 
 export const StatusBar: React.FC = () => {
   const { cats, setCats, currentSession } = useAppStore();
@@ -98,6 +99,9 @@ export const StatusBar: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Session Chain 状态 */}
+      <SessionChainPanel />
 
       {/* 调用历史区 */}
       <div className="bg-white border border-gray-200 rounded-xl p-6">

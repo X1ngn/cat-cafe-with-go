@@ -76,3 +76,33 @@ export interface Workspace {
   createdAt: Date;
   updatedAt: Date;
 }
+
+// Session Chain 相关类型
+export interface SessionChainItem {
+  id: string;
+  seqNo: number;
+  status: 'active' | 'sealed' | 'compressing';
+  eventCount: number;
+  tokenCount: number;
+  summary: string | null;
+  createdAt: string;
+  sealedAt: string | null;
+}
+
+export interface ActiveSessionInfo {
+  id: string;
+  seqNo: number;
+  eventCount: number;
+  tokenCount: number;
+  maxTokens: number;
+  usagePercent: number;
+  maxEventsPerSession: number;
+}
+
+export interface SessionChainStatus {
+  threadId: string;
+  sessions: SessionChainItem[];
+  activeSession: ActiveSessionInfo | null;
+  totalEvents: number;
+  totalSessions: number;
+}

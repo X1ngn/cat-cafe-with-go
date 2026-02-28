@@ -13,12 +13,15 @@ import (
 
 // AgentConfig Agent 配置结构
 type AgentConfig struct {
-	Name             string `yaml:"name"`
-	Pipe             string `yaml:"pipe"`
-	CLIType          string `yaml:"cli_type"`
-	ExecCmd          string `yaml:"exec_cmd"`
-	SystemPromptPath string `yaml:"system_prompt_path"`
-	Avatar           string `yaml:"avatar"`
+	Name             string                  `yaml:"name"`
+	Pipe             string                  `yaml:"pipe"`
+	CLIType          string                  `yaml:"cli_type"`
+	ExecCmd          string                  `yaml:"exec_cmd"`
+	SystemPromptPath string                  `yaml:"system_prompt_path"`
+	Avatar           string                  `yaml:"avatar"`
+	ContextMode      string                  `yaml:"context_mode,omitempty"`       // "cli_managed" | "orchestrated"
+	MemoryCompressor *MemoryCompressorConfig `yaml:"memory_compressor,omitempty"`
+	SessionChainCfg  *SessionChainConfig     `yaml:"session_chain,omitempty"`
 }
 
 // Config 系统配置

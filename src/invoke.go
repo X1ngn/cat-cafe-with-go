@@ -19,6 +19,7 @@ type AgentOptions struct {
 	ApprovalMode   string // 用于 Gemini CLI
 	SessionID      string // 用于 --resume
 	WorkDir        string // 工作目录
+	MCPConfigPath  string // MCP 配置文件路径
 }
 
 // InvokeCLI 调用指定的 CLI 工具并处理其流式输出。
@@ -45,6 +46,9 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 		if options.PermissionMode != "" {
 			args = append(args, "--permission-mode", options.PermissionMode)
 		}
+		if options.MCPConfigPath != "" {
+			args = append(args, "--mcp-config", options.MCPConfigPath)
+		}
 	case "gemini":
 		args = append(args, "-p", prompt, "--output-format", "stream-json")
 		if options.Model != "" {
@@ -58,6 +62,9 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 		}
 		if options.ApprovalMode != "" {
 			args = append(args, "--approval-mode", options.ApprovalMode)
+		}
+		if options.MCPConfigPath != "" {
+			args = append(args, "--mcp-config", options.MCPConfigPath)
 		}
 	case "codex":
 		// Codex 使用不同的命令格式，通过 stdin 传递 prompt 避免参数解析问题

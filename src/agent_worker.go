@@ -24,11 +24,12 @@ type AgentWorker struct {
 	consumerGroup    string
 	consumerName     string
 	chatLogFile      string
-	workspaceManager *WorkspaceManager // 新增：工作区管理器
+	workspaceManager *WorkspaceManager      // 工作区管理器
+	chainManager     *SessionChainManager   // Session Chain 管理器
 }
 
 // NewAgentWorker 创建 Agent 工作进程
-func NewAgentWorker(config *AgentConfig, systemPrompt string, redisAddr, redisPassword string, redisDB int, workspaceManager *WorkspaceManager) (*AgentWorker, error) {
+func NewAgentWorker(config *AgentConfig, systemPrompt string, redisAddr, redisPassword string, redisDB int, workspaceManager *WorkspaceManager, chainManager *SessionChainManager) (*AgentWorker, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     redisAddr,
 		Password: redisPassword,
@@ -58,6 +59,7 @@ func NewAgentWorker(config *AgentConfig, systemPrompt string, redisAddr, redisPa
 		consumerName:     consumerName,
 		chatLogFile:      "chat_history.jsonl",
 		workspaceManager: workspaceManager, // 新增：注入工作区管理器
+		chainManager:     chainManager,     // 新增：注入 Session Chain 管理器
 	}
 
 	// 创建消费者组
@@ -199,7 +201,7 @@ func (w *AgentWorker) handleMessage(message redis.XMessage) error {
 // executeTask 执行任务
 func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
 	LogDebug("[Agent-%s] 开始执行任务: %s", w.config.Name, task.TaskID)
-	LogDebug("[Agent-%s] CLI 类型: %s", w.config.Name, w.config.CLIType)
+	LogDebug("[Agent-%s] CLI 类型: %s, 上下文模式: %s", w.config.Name, w.config.CLIType, w.config.ContextMode)
 
 	// 查询工作区路径
 	var workDir string
@@ -213,75 +215,116 @@ func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
 		}
 	}
 
-	// 获取会话历史消息
-	chatHistory := w.getSessionHistory(task.SessionID)
-
-	// 组合系统提示词、对话历史和当前任务
+	// 根据 context_mode 构建 prompt 和获取 AI session ID
 	var fullPrompt string
-	if chatHistory != "" {
-		fullPrompt = fmt.Sprintf("%s\n\n========================================\n\n【对话历史】\n%s\n========================================\n\n🎯 你是%s，请回应以下消息：\n%s\n\n请结合上面的对话历史来完成任务。", w.systemPrompt, chatHistory, w.config.Name, task.Content)
-	} else {
-		fullPrompt = fmt.Sprintf("%s\n\n========================================\n\n用户需求：\n%s", w.systemPrompt, task.Content)
-	}
-
-	// 打印完整 prompt 到日志，用于调试上下文超长问题
-	// LogInfo("[Agent-%s] === fullPrompt 长度: %d 字符 ===", w.config.Name, len(fullPrompt))
-	// LogInfo("[Agent-%s] === fullPrompt 内容开始 ===\n%s\n=== fullPrompt 内容结束 ===", w.config.Name, fullPrompt)
-
-	// 从 Redis 获取 AI Session ID 映射
 	var aiSessionID string
-	if task.SessionID != "" {
-		mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
-		aiSessionID, _ = w.redisClient.Get(w.ctx, mappingKey).Result()
-		if aiSessionID != "" {
-			LogDebug("[Agent-%s] 找到 AI Session ID 映射: %s -> %s", w.config.Name, task.SessionID, aiSessionID)
-		} else {
-			LogDebug("[Agent-%s] 未找到 AI Session ID 映射，将创建新会话", w.config.Name)
+
+	switch w.config.ContextMode {
+	case "orchestrated":
+		// 策略 A：从 Session Chain 读取全部 Event，不使用 --resume
+		fullPrompt = w.buildOrchestratedPrompt(task)
+		aiSessionID = ""
+
+	case "cli_managed":
+		// 策略 B：读取增量 Event + 使用 AI session ID
+		fullPrompt, aiSessionID = w.buildCLIManagedPrompt(task)
+
+	default:
+		// 兼容旧逻辑：回退到当前实现
+		chatHistory := w.getSessionHistory(task.SessionID)
+		fullPrompt = w.buildLegacyPrompt(chatHistory, task)
+		// 从 Redis 获取 AI Session ID 映射（旧逻辑）
+		if task.SessionID != "" {
+			mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
+			aiSessionID, _ = w.redisClient.Get(w.ctx, mappingKey).Result()
 		}
 	}
 
-	// 直接调用 InvokeAgent，不再通过 exec.Command 调用 minimal-* 二进制
-	response, newSessionID, err := InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)
-	if err != nil {
-		LogError("[Agent-%s] 调用 CLI 失败: %v", w.config.Name, err)
-		return "", fmt.Errorf("调用 %s CLI 失败: %w", w.config.CLIType, err)
+	// 调用 CLI（如果配置了 context_mode，注入 MCP 配置）
+	var response, newSessionID string
+	var invokeErr error
+	if w.config.ContextMode != "" && task.SessionID != "" {
+		mcpConfigPath, mcpErr := GenerateMCPConfig(task.SessionID, "")
+		if mcpErr != nil {
+			LogWarn("[Agent-%s] 生成 MCP 配置失败: %v（将不注入 MCP）", w.config.Name, mcpErr)
+			response, newSessionID, invokeErr = InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)
+		} else {
+			LogDebug("[Agent-%s] MCP 配置已生成: %s", w.config.Name, mcpConfigPath)
+			response, newSessionID, invokeErr = InvokeAgentWithMCP(w.config.CLIType, fullPrompt, aiSessionID, workDir, mcpConfigPath)
+		}
+	} else {
+		response, newSessionID, invokeErr = InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)
+	}
+	if invokeErr != nil {
+		LogError("[Agent-%s] 调用 CLI 失败: %v", w.config.Name, invokeErr)
+		return "", fmt.Errorf("调用 %s CLI 失败: %w", w.config.CLIType, invokeErr)
 	}
 
 	LogDebug("[Agent-%s] CLI 返回 - response长度: %d, newSessionID: %s", w.config.Name, len(response), newSessionID)
 
-	// 保存新的 AI Session ID 映射到 Redis
-	if newSessionID != "" && newSessionID != aiSessionID && task.SessionID != "" {
-		mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
-		if err := w.redisClient.Set(w.ctx, mappingKey, newSessionID, 0).Err(); err != nil {
-			LogWarn("[Agent-%s] 保存 AI Session ID 映射失败: %v", w.config.Name, err)
-		} else {
-			LogInfo("[Agent-%s] ✓ 已保存 AI Session ID 映射: %s -> %s", w.config.Name, task.SessionID, newSessionID)
+	// 后处理：根据 context_mode 执行不同的持久化逻辑
+	if w.config.ContextMode != "" && w.chainManager != nil && task.SessionID != "" {
+		threadID := task.SessionID
+
+		// 确保 chain 存在
+		w.chainManager.GetOrCreateChain(threadID)
+
+		// 记录 Invocation
+		inv := InvocationRecord{
+			ID:        generateTaskID(),
+			SessionID: func() string {
+				s, _ := w.chainManager.GetActiveSession(threadID)
+				if s != nil {
+					return s.ID
+				}
+				return ""
+			}(),
+			ThreadID:  threadID,
+			AgentName: w.config.Name,
+			Prompt:    fullPrompt,
+			Response:  response,
+		}
+		w.chainManager.RecordInvocation(threadID, inv)
+
+		// 注意：cat Event 的写入已统一由 api_server.go 处理，避免双写
+
+		// 检查 Seal 阈值
+		if w.config.SessionChainCfg != nil {
+			w.chainManager.CheckAndSeal(threadID, w.config.SessionChainCfg)
+		}
+
+		// 更新 Cursor（仅 cli_managed 模式）
+		if w.config.ContextMode == "cli_managed" {
+			activeSession, err := w.chainManager.GetActiveSession(threadID)
+			if err == nil {
+				w.chainManager.UpdateCursor(
+					w.config.Name, threadID,
+					activeSession.ID, activeSession.EndEvent, newSessionID)
+			}
+		}
+	} else {
+		// 旧逻辑：保存 AI Session ID 映射到 Redis
+		if newSessionID != "" && newSessionID != aiSessionID && task.SessionID != "" {
+			mappingKey := fmt.Sprintf("session_mapping:%s:%s", task.SessionID, w.config.Name)
+			if err := w.redisClient.Set(w.ctx, mappingKey, newSessionID, 0).Err(); err != nil {
+				LogWarn("[Agent-%s] 保存 AI Session ID 映射失败: %v", w.config.Name, err)
+			} else {
+				LogInfo("[Agent-%s] ✓ 已保存 AI Session ID 映射: %s -> %s", w.config.Name, task.SessionID, newSessionID)
+			}
 		}
 	}
 
 	return response, nil
 }
 
-// getSessionHistory 从 Redis 获取会话历史消息并格式化
+// getSessionHistory 从 Session Chain 获取会话历史消息并格式化
 func (w *AgentWorker) getSessionHistory(sessionID string) string {
-	if sessionID == "" {
+	if sessionID == "" || w.chainManager == nil {
 		return ""
 	}
 
-	key := "session:" + sessionID
-	jsonData, err := w.redisClient.Get(w.ctx, key).Result()
-	if err != nil {
-		LogDebug("[Agent-%s] 获取会话历史失败: %v", w.config.Name, err)
-		return ""
-	}
-
-	var data SessionData
-	if err := json.Unmarshal([]byte(jsonData), &data); err != nil {
-		LogWarn("[Agent-%s] 解析会话历史失败: %v", w.config.Name, err)
-		return ""
-	}
-
-	if len(data.Messages) == 0 {
+	events, err := w.chainManager.GetAllEvents(sessionID)
+	if err != nil || len(events) == 0 {
 		return ""
 	}
 
@@ -290,38 +333,25 @@ func (w *AgentWorker) getSessionHistory(sessionID string) string {
 	// 每条猫猫消息最多保留 500 字符，避免长回复撑爆上下文
 	const maxContentLen = 500
 
-	messages := data.Messages
-	if len(messages) > maxMessages {
-		messages = messages[len(messages)-maxMessages:]
+	if len(events) > maxMessages {
+		events = events[len(events)-maxMessages:]
 	}
 
-	// 格式化历史消息，带角色标注
 	var history strings.Builder
-	for _, msg := range messages {
-		content := msg.Content
-		switch msg.Type {
-		case "user":
-			name := "用户"
-			if msg.Sender != nil {
-				name = msg.Sender.Name
-			}
-			history.WriteString(fmt.Sprintf("[%s] %s\n", name, content))
-		case "cat":
-			name := "猫猫"
-			if msg.Sender != nil {
-				name = msg.Sender.Name
-			}
-			// 猫猫回复可能很长，做截断
+	for _, ev := range events {
+		content := ev.Content
+		switch ev.Type {
+		case SCEventUser:
+			history.WriteString(fmt.Sprintf("[用户] %s\n", content))
+		case SCEventCat:
 			if len(content) > maxContentLen {
 				content = content[:maxContentLen] + "...(已截断)"
 			}
-			history.WriteString(fmt.Sprintf("[%s] %s\n", name, content))
-		case "system":
-			history.WriteString(fmt.Sprintf("[系统] %s\n", msg.Content))
+			history.WriteString(fmt.Sprintf("[%s] %s\n", ev.Sender, content))
 		}
 	}
 
-	LogDebug("[Agent-%s] 已加载 %d/%d 条历史消息", w.config.Name, len(messages), len(data.Messages))
+	LogDebug("[Agent-%s] 已加载 %d 条历史消息（从 Session Chain）", w.config.Name, len(events))
 	return strings.TrimSpace(history.String())
 }
 
