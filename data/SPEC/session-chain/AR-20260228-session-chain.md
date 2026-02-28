@@ -1104,42 +1104,43 @@ Seal 是异步操作（压缩可能耗时较长）。在 Seal 触发后：
 
 ✅ 验收：编译通过，69/72 测试通过
 
-### Phase 4：Seal 与压缩
+### Phase 4：Seal 与压缩 ✅ 已完成
 
 目标：通过 `session_chain_seal_test.go` 全部用例。
 
-1. 实现 `CompressSession`：调用压缩模型生成摘要（当前 3 个 skip 测试）
-2. 实现压缩 Prompt 模板
-3. 实现异步压缩 + 失败重试
-4. 处理 cli_managed 模式下 Cursor 指向已压缩 Session 的情况
+1. ✅ 实现 `CompressSession`：通过可注入的 `CompressFn` 调用压缩模型生成摘要
+2. ✅ 实现压缩 Prompt 模板（SPEC 3.4.3 格式）
+3. ✅ 实现 `DefaultCompressFn`（生产环境通过 `InvokeCLI` 调用模型）
+4. ✅ 测试环境通过 mock `CompressFn` 注入，3 个 skip 测试全部通过
 
-✅ 验收：Phase 4 相关测试用例全部通过（含 3 个当前 skip 的测试）
+✅ 验收：72/72 测试通过，0 skip
 
-### Phase 5：MCP Server
+### Phase 5：MCP Server ✅ 已完成
 
 目标：通过 `session_chain_mcp_test.go` 全部用例。
 
-1. 实现 MCP Server 框架（stdio 模式）
-2. 实现 `list_session_chain` 工具
-3. 实现 `read_session_events` 工具（含 3 种 view 模式）
-4. 实现 `read_invocation_detail` 工具
-5. 实现 `session_search` 工具（基础全文搜索）
-6. 实现 MCP 配置注入到 CLI 调用
-7. 在 `main.go` 中添加 `--mode mcp` 启动模式
+1. ✅ 实现 MCP Server 框架（`src/session_chain_mcp.go`，JSON-RPC 2.0 over stdio）
+2. ✅ 实现 `list_session_chain` 工具
+3. ✅ 实现 `read_session_events` 工具（含 3 种 view 模式）
+4. ✅ 实现 `read_invocation_detail` 工具
+5. ✅ 实现 `session_search` 工具（基础全文搜索）
+6. ✅ 实现 MCP 配置注入到 CLI 调用（`AgentOptions.MCPConfigPath`、`GenerateMCPConfig`）
+7. ✅ 在 `main.go` 中添加 `--mode mcp --thread {threadId}` 启动模式
+8. ✅ `agent_worker.go` 自动生成 MCP 配置并注入 CLI 调用
 
-✅ 验收：Phase 5 相关测试用例全部通过
+✅ 验收：72/72 测试通过，MCP Server stdio 协议验证通过
 
-### Phase 6：集成验收
+### Phase 6：集成验收 ✅ 已完成
 
 目标：通过 `session_chain_integration_test.go` 全部用例 + 全量回归。
 
-1. 端到端集成测试：完整的消息流转 → Event 写入 → Seal → 压缩 → MCP 查询
-2. 向后兼容测试：无 session_chain 配置时走旧逻辑
-3. 并发测试：多 Agent 同时写入同一 Session
-4. 恢复测试：进程重启后 Chain 状态恢复
-5. 全量测试回归：`go test ./test/... -v` 全部通过
+1. ✅ 端到端集成测试：完整的消息流转 → Event 写入 → Seal → 压缩 → MCP 查询
+2. ✅ 向后兼容测试：无 session_chain 配置时走旧逻辑
+3. ✅ 并发测试：多 Agent 同时写入同一 Session
+4. ✅ 恢复测试：进程重启后 Chain 状态恢复
+5. ✅ 全量测试回归：`go test ./test/... -v` 全部通过
 
-✅ 最终验收：所有测试文件全部通过，零失败
+✅ 最终验收：72/72 测试全部通过，零失败，零 skip
 
 ### Phase 7：上下文长度评估模块
 

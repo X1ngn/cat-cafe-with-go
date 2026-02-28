@@ -11,8 +11,9 @@ func main() {
 	// 命令行参数
 	var (
 		configPath  = flag.String("config", "config.yaml", "配置文件路径")
-		mode        = flag.String("mode", "", "运行模式: ui(交互界面), agent(Agent工作进程), api(API服务器)")
+		mode        = flag.String("mode", "", "运行模式: ui(交互界面), agent(Agent工作进程), api(API服务器), mcp(MCP Server)")
 		agentName   = flag.String("agent", "", "Agent 名称 (agent 模式必需)")
+		threadID    = flag.String("thread", "", "Thread ID (mcp 模式必需)")
 		sendTask    = flag.Bool("send", false, "发送任务模式")
 		listAgents  = flag.Bool("list", false, "列出所有 Agent")
 		targetAgent = flag.String("to", "", "目标 Agent 名称")
@@ -53,6 +54,31 @@ func main() {
 
 		if err := router.Run(addr); err != nil {
 			log.Fatalf("启动服务器失败: %v", err)
+		}
+		return
+	}
+
+	// MCP Server 模式
+	if *mode == "mcp" {
+		if *threadID == "" {
+			fmt.Fprintf(os.Stderr, "MCP 模式需要指定 --thread 参数\n")
+			os.Exit(1)
+		}
+
+		dataDir := "data/session_chains"
+		chainManager, err := NewSessionChainManager(dataDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "创建 SessionChainManager 失败: %v\n", err)
+			os.Exit(1)
+		}
+
+		// 确保 chain 存在
+		chainManager.GetOrCreateChain(*threadID)
+
+		mcpServer := NewSessionChainMCPServer(chainManager, *threadID)
+		if err := mcpServer.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "MCP Server 异常退出: %v\n", err)
+			os.Exit(1)
 		}
 		return
 	}

@@ -240,11 +240,24 @@ func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
 		}
 	}
 
-	// 调用 CLI
-	response, newSessionID, err := InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)
-	if err != nil {
-		LogError("[Agent-%s] 调用 CLI 失败: %v", w.config.Name, err)
-		return "", fmt.Errorf("调用 %s CLI 失败: %w", w.config.CLIType, err)
+	// 调用 CLI（如果配置了 context_mode，注入 MCP 配置）
+	var response, newSessionID string
+	var invokeErr error
+	if w.config.ContextMode != "" && task.SessionID != "" {
+		mcpConfigPath, mcpErr := GenerateMCPConfig(task.SessionID, "")
+		if mcpErr != nil {
+			LogWarn("[Agent-%s] 生成 MCP 配置失败: %v（将不注入 MCP）", w.config.Name, mcpErr)
+			response, newSessionID, invokeErr = InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)
+		} else {
+			LogDebug("[Agent-%s] MCP 配置已生成: %s", w.config.Name, mcpConfigPath)
+			response, newSessionID, invokeErr = InvokeAgentWithMCP(w.config.CLIType, fullPrompt, aiSessionID, workDir, mcpConfigPath)
+		}
+	} else {
+		response, newSessionID, invokeErr = InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)
+	}
+	if invokeErr != nil {
+		LogError("[Agent-%s] 调用 CLI 失败: %v", w.config.Name, invokeErr)
+		return "", fmt.Errorf("调用 %s CLI 失败: %w", w.config.CLIType, invokeErr)
 	}
 
 	LogDebug("[Agent-%s] CLI 返回 - response长度: %d, newSessionID: %s", w.config.Name, len(response), newSessionID)

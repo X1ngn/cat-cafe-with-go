@@ -414,3 +414,170 @@ func TestIntegration_ConsecutiveMultiSeal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 16, meta.TotalEvents, "3×5 + 1 = 16 个 Event")
 }
+
+func TestIntegration_CompressThenMCPQuery(t *testing.T) {
+	// TC-6.11: 超长上下文 → Seal → 压缩生成 Summary → 新 Session 继续对话
+	//          → Agent 通过 MCP 工具读取旧 Session 的 Summary 和 Events
+	mgr, _, cleanup := setupSessionChainTest(t)
+	defer cleanup()
+
+	threadID := "thread-integ-011"
+	_, err := mgr.GetOrCreateChain(threadID)
+	require.NoError(t, err)
+
+	// 1. 模拟超长对话（S001 写入大量 Event）
+	for i := 0; i < 10; i++ {
+		err = mgr.AppendEvent(threadID, makeUserEvent(
+			fmt.Sprintf("用户第 %d 条消息：讨论 WebSocket 实现细节", i+1)))
+		require.NoError(t, err)
+		err = mgr.AppendEvent(threadID, makeCatEvent("花花",
+			fmt.Sprintf("花花第 %d 条回复：WebSocket 代码片段 %d", i+1, i+1)))
+		require.NoError(t, err)
+	}
+
+	// 2. Seal S001
+	err = mgr.SealActiveSession(threadID)
+	require.NoError(t, err)
+
+	// 验证 S001 状态为 compressing
+	s001, err := mgr.GetSession(threadID, "S001")
+	require.NoError(t, err)
+	assert.Equal(t, SessionCompressing, s001.Status)
+
+	// 3. 压缩 S001 → 生成 Summary，状态变为 sealed
+	compressorConfig := &MemoryCompressorConfig{
+		Model:            "test-model",
+		MaxSummaryTokens: 200,
+	}
+	err = mgr.CompressSession(threadID, "S001", compressorConfig)
+	require.NoError(t, err)
+
+	s001, err = mgr.GetSession(threadID, "S001")
+	require.NoError(t, err)
+	assert.Equal(t, SessionSealed, s001.Status)
+	assert.NotEmpty(t, s001.Summary, "压缩后 S001 应该有 Summary")
+
+	// 4. 在新 Session（S002）中继续对话
+	err = mgr.AppendEvent(threadID, makeUserEvent("继续上次的 WebSocket 话题，帮我加上心跳检测"))
+	require.NoError(t, err)
+	err = mgr.AppendEvent(threadID, makeCatEvent("花花", "好的，基于之前的实现，加上心跳..."))
+	require.NoError(t, err)
+
+	// 5. Agent 通过 MCP list_session_chain 查看 Chain 全貌
+	summaries, err := mgr.MCPListSessionChain(threadID, "花花")
+	require.NoError(t, err)
+	require.Len(t, summaries, 2, "应该有 2 个 Session")
+
+	// S001: sealed，有 summary
+	assert.Equal(t, "S001", summaries[0].ID)
+	assert.Equal(t, SessionSealed, summaries[0].Status)
+	assert.NotEmpty(t, summaries[0].Summary, "MCP 返回的 S001 应该有 Summary")
+	assert.Equal(t, 20, summaries[0].EventCount)
+
+	// S002: active，无 summary
+	assert.Equal(t, "S002", summaries[1].ID)
+	assert.Equal(t, SessionActive, summaries[1].Status)
+	assert.Empty(t, summaries[1].Summary)
+	assert.Equal(t, 2, summaries[1].EventCount)
+
+	// 6. Agent 通过 MCP read_session_events 读取旧 Session 的 Events
+	oldEvents, nextCursor, err := mgr.MCPReadSessionEvents("S001", 0, 50, "chat")
+	require.NoError(t, err)
+	assert.Len(t, oldEvents, 20, "S001 应该有 20 条 Event")
+	assert.Equal(t, -1, nextCursor, "20 条一页读完，无下一页")
+
+	// 验证旧 Session 的 Event 内容完整
+	assert.Equal(t, EventUser, oldEvents[0].Type)
+	assert.Contains(t, oldEvents[0].Content, "WebSocket")
+	assert.Equal(t, EventCat, oldEvents[1].Type)
+	assert.Equal(t, "花花", oldEvents[1].Sender)
+
+	// 7. Agent 通过 MCP read_session_events 读取当前 Session
+	newEvents, _, err := mgr.MCPReadSessionEvents("S002", 0, 50, "chat")
+	require.NoError(t, err)
+	assert.Len(t, newEvents, 2)
+	assert.Contains(t, newEvents[0].Content, "心跳检测")
+
+	// 8. Agent 通过 MCP session_search 搜索跨 Session 的关键词
+	results, err := mgr.MCPSessionSearch(threadID, "WebSocket", 50)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(results), 2, "WebSocket 应该在多个 Event 中出现")
+
+	// 验证搜索结果跨越了两个 Session
+	sessionIDs := make(map[string]bool)
+	for _, r := range results {
+		sessionIDs[r.SessionID] = true
+	}
+	assert.True(t, sessionIDs["S001"], "搜索结果应该包含 S001 的内容")
+	assert.True(t, sessionIDs["S002"], "搜索结果应该包含 S002 的内容")
+}
+
+func TestIntegration_MultiSealCompressThenContinue(t *testing.T) {
+	// TC-6.12: 多轮 Seal+压缩 → 后续压缩 prompt 包含之前的 Summary → MCP 可查所有 Summary
+	mgr, _, cleanup := setupSessionChainTest(t)
+	defer cleanup()
+
+	threadID := "thread-integ-012"
+	_, err := mgr.GetOrCreateChain(threadID)
+	require.NoError(t, err)
+
+	compressorConfig := &MemoryCompressorConfig{
+		Model:            "test-model",
+		MaxSummaryTokens: 200,
+	}
+
+	// 第一轮：写入 → Seal → 压缩
+	for i := 0; i < 5; i++ {
+		mgr.AppendEvent(threadID, makeUserEvent(fmt.Sprintf("第一轮消息 #%d", i+1)))
+	}
+	err = mgr.SealActiveSession(threadID)
+	require.NoError(t, err)
+	err = mgr.CompressSession(threadID, "S001", compressorConfig)
+	require.NoError(t, err)
+
+	// 第二轮：写入 → Seal → 压缩（应该包含 S001 的 Summary）
+	for i := 0; i < 5; i++ {
+		mgr.AppendEvent(threadID, makeUserEvent(fmt.Sprintf("第二轮消息 #%d", i+1)))
+	}
+	err = mgr.SealActiveSession(threadID)
+	require.NoError(t, err)
+	err = mgr.CompressSession(threadID, "S002", compressorConfig)
+	require.NoError(t, err)
+
+	// 第三轮：继续在 S003 中对话
+	err = mgr.AppendEvent(threadID, makeUserEvent("第三轮的新消息"))
+	require.NoError(t, err)
+
+	// 验证：MCP list 返回 3 个 Session，前 2 个有 Summary
+	summaries, err := mgr.MCPListSessionChain(threadID, "花花")
+	require.NoError(t, err)
+	require.Len(t, summaries, 3)
+
+	assert.Equal(t, SessionSealed, summaries[0].Status)
+	assert.NotEmpty(t, summaries[0].Summary, "S001 应该有 Summary")
+
+	assert.Equal(t, SessionSealed, summaries[1].Status)
+	assert.NotEmpty(t, summaries[1].Summary, "S002 应该有 Summary")
+
+	assert.Equal(t, SessionActive, summaries[2].Status)
+	assert.Equal(t, 1, summaries[2].EventCount)
+
+	// 验证：cli_managed 模式下 Cursor 指向已压缩的 Session
+	// 模拟 Agent 上次读到 S001 的最后一条
+	err = mgr.UpdateCursor("花花", threadID, "S001", 5, "ai-session-old")
+	require.NoError(t, err)
+
+	cursor := mgr.GetCursor("花花", threadID)
+	require.NotNil(t, cursor)
+
+	// Agent 发现 Cursor 指向的 Session 已 sealed，通过 MCP 获取 Summary
+	cursorSession, err := mgr.GetSession(threadID, cursor.LastSessionID)
+	require.NoError(t, err)
+	assert.Equal(t, SessionSealed, cursorSession.Status)
+	assert.NotEmpty(t, cursorSession.Summary, "Agent 应该能读到压缩摘要")
+
+	// Agent 通过 GetEventsAfter 获取增量 Event
+	incrementalEvents, err := mgr.GetEventsAfter(threadID, cursor.LastSessionID, cursor.LastEventNo)
+	require.NoError(t, err)
+	assert.Equal(t, 6, len(incrementalEvents), "S002 的 5 条 + S003 的 1 条 = 6 条增量")
+}

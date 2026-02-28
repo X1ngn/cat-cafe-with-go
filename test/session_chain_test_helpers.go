@@ -139,6 +139,9 @@ type SessionSummary struct {
 
 // --- SessionChainManager ---
 
+// CompressFunc 压缩函数签名（与 src 保持一致）
+type CompressFunc func(prompt string, config *MemoryCompressorConfig) (string, error)
+
 // SessionChainManager 管理所有 Thread 的 Session Chain
 type SessionChainManager struct {
 	dataDir string
@@ -148,6 +151,7 @@ type SessionChainManager struct {
 	sessions map[string]map[string]*SessionRecord     // threadID -> sessionID -> record
 	events   map[string]map[string][]SessionEvent     // threadID -> sessionID -> events
 	cursors  map[string]*AgentCursor                  // "agentName:threadID" -> cursor
+	CompressFn CompressFunc // 可注入的压缩函数
 }
 
 // NewSessionChainManager 创建 SessionChainManager
@@ -664,8 +668,92 @@ func (m *SessionChainManager) CheckAndSeal(threadID string, config *SessionChain
 // --- CompressSession ---
 
 func (m *SessionChainManager) CompressSession(threadID, sessionID string, config *MemoryCompressorConfig) error {
-	// Phase 4: 需要调用压缩模型
-	return fmt.Errorf("压缩模型不可用（测试环境）")
+	m.mu.Lock()
+
+	if _, ok := m.metas[threadID]; !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("thread %s 不存在", threadID)
+	}
+
+	session, ok := m.sessions[threadID][sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("Session %s 不存在", sessionID)
+	}
+
+	if session.Status != SessionCompressing {
+		m.mu.Unlock()
+		return fmt.Errorf("Session %s 状态为 %s，只能压缩 compressing 状态的 Session", sessionID, session.Status)
+	}
+
+	// 收集之前所有 sealed session 的 summary
+	sessions := m.sortedSessions(threadID)
+	var previousSummaries strings.Builder
+	for _, s := range sessions {
+		if s.SeqNo >= session.SeqNo {
+			break
+		}
+		if s.Summary != "" {
+			previousSummaries.WriteString(fmt.Sprintf("### Session #%d 摘要\n%s\n\n", s.SeqNo, s.Summary))
+		}
+	}
+
+	// 收集当前 session 的所有 events
+	evts := m.events[threadID][sessionID]
+	var eventsText strings.Builder
+	for _, e := range evts {
+		switch e.Type {
+		case EventUser:
+			eventsText.WriteString(fmt.Sprintf("[用户] %s\n", e.Content))
+		case EventCat:
+			eventsText.WriteString(fmt.Sprintf("[%s] %s\n", e.Sender, e.Content))
+		case EventSystem:
+			eventsText.WriteString(fmt.Sprintf("[系统] %s\n", e.Content))
+		}
+	}
+
+	m.mu.Unlock()
+
+	// 构建压缩 prompt
+	prevSummaryStr := previousSummaries.String()
+	if prevSummaryStr == "" {
+		prevSummaryStr = "（无）"
+	}
+
+	prompt := fmt.Sprintf(`你是一个对话记忆压缩助手。请将以下对话记录压缩为一份结构化摘要。
+
+## 之前的摘要（如有）
+%s
+
+## 当前对话记录
+%s
+
+## 要求
+1. 保留关键决策和结论
+2. 保留重要的代码文件路径和技术细节
+3. 保留未完成的任务和待办事项
+4. 删除寒暄、重复内容和中间过程
+5. 摘要长度控制在原文的 20%% 以内
+6. 标注未完成的任务和待确认的问题`, prevSummaryStr, eventsText.String())
+
+	// 调用压缩函数
+	if m.CompressFn == nil {
+		return fmt.Errorf("压缩模型不可用（未注入 CompressFn）")
+	}
+
+	summary, err := m.CompressFn(prompt, config)
+	if err != nil {
+		return fmt.Errorf("压缩失败: %w", err)
+	}
+
+	// 更新 session record
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session.Summary = summary
+	session.Status = SessionSealed
+
+	return m.writeSessionMarkdownToDisk(threadID, session, m.events[threadID][sessionID])
 }
 
 // --- Token 估算 ---
@@ -1163,6 +1251,11 @@ func setupSessionChainTest(t *testing.T) (*SessionChainManager, string, func()) 
 
 	mgr, err := NewSessionChainManager(tmpDir)
 	require.NoError(t, err)
+
+	// 注入 mock 压缩函数
+	mgr.CompressFn = func(prompt string, config *MemoryCompressorConfig) (string, error) {
+		return fmt.Sprintf("测试摘要：对话包含多条消息，涉及测试场景。模型: %s", config.Model), nil
+	}
 
 	cleanup := func() {
 		os.RemoveAll(tmpDir)
