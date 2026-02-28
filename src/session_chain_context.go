@@ -13,6 +13,11 @@ func (w *AgentWorker) buildOrchestratedPrompt(task *TaskMessage) string {
 		return w.buildLegacyPrompt(w.getSessionHistory(task.SessionID), task)
 	}
 
+	// 从磁盘重新加载最新数据（跨进程同步）
+	if err := w.chainManager.ReloadThread(threadID); err != nil {
+		LogWarn("[Agent-%s] 重新加载 Thread 失败: %v，尝试创建", w.config.Name, err)
+	}
+
 	// 确保 chain 存在
 	_, err := w.chainManager.GetOrCreateChain(threadID)
 	if err != nil {
@@ -69,6 +74,11 @@ func (w *AgentWorker) buildCLIManagedPrompt(task *TaskMessage) (string, string) 
 	if threadID == "" || w.chainManager == nil {
 		chatHistory := w.getSessionHistory(task.SessionID)
 		return w.buildLegacyPrompt(chatHistory, task), ""
+	}
+
+	// 从磁盘重新加载最新数据（跨进程同步）
+	if err := w.chainManager.ReloadThread(threadID); err != nil {
+		LogWarn("[Agent-%s] 重新加载 Thread 失败: %v，尝试创建", w.config.Name, err)
 	}
 
 	_, err := w.chainManager.GetOrCreateChain(threadID)

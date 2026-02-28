@@ -364,6 +364,60 @@ func (m *SessionChainManager) writeCursorToDisk(threadID, agentName string, curs
 	return os.WriteFile(path, data, 0644)
 }
 
+// ReloadThread 从磁盘重新加载指定 Thread 的全部数据到内存
+// 用于跨进程场景：API Server 写入后，Agent Worker 需要读取最新数据
+func (m *SessionChainManager) ReloadThread(threadID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	metaPath := m.metaPath(threadID)
+	if _, err := os.Stat(metaPath); os.IsNotExist(err) {
+		return fmt.Errorf("thread %s 不存在", threadID)
+	}
+
+	meta, err := m.readMetaFromDisk(threadID)
+	if err != nil {
+		return err
+	}
+
+	m.metas[threadID] = meta
+	m.sessions[threadID] = make(map[string]*SessionRecord)
+	m.events[threadID] = make(map[string][]SessionEvent)
+
+	for seq := 1; seq <= meta.SessionCount; seq++ {
+		sid := sessionIDFromSeq(seq)
+		sess, evts, err := m.readSessionMarkdownFromDisk(threadID, sid)
+		if err != nil {
+			continue
+		}
+		m.sessions[threadID][sid] = sess
+		m.events[threadID][sid] = evts
+	}
+
+	// 重新加载 cursors
+	cursorsDir := filepath.Join(m.threadPath(threadID), "cursors")
+	cursorEntries, err := os.ReadDir(cursorsDir)
+	if err == nil {
+		for _, ce := range cursorEntries {
+			if !strings.HasSuffix(ce.Name(), ".json") {
+				continue
+			}
+			agentName := strings.TrimSuffix(ce.Name(), ".json")
+			data, err := os.ReadFile(filepath.Join(cursorsDir, ce.Name()))
+			if err != nil {
+				continue
+			}
+			var cursor AgentCursor
+			if err := json.Unmarshal(data, &cursor); err != nil {
+				continue
+			}
+			m.cursors[cursorKey(agentName, threadID)] = &cursor
+		}
+	}
+
+	return nil
+}
+
 // --- YAML 辅助函数 ---
 
 func yamlGetString(m map[string]interface{}, key string) string {
