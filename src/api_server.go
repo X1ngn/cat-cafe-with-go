@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,25 +28,26 @@ type SessionManager struct {
 	orchestrator     *Orchestrator      // 新增：编排器
 	wsHub            *WSHub             // 新增：WebSocket Hub
 	workspaceManager *WorkspaceManager  // 新增：工作区管理器
+	chainManager     *SessionChainManager // 新增：Session Chain 管理器
 }
 
 // SessionContext 会话上下文，每个会话有独立的调度器
 type SessionContext struct {
-	ID            string
-	Name          string
-	Summary       string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	MessageCount  int
-	Scheduler     *Scheduler
-	Messages      []Message
-	CallHistory   []CallHistoryItem
-	JoinedCats    map[string]bool // 记录已加入的猫猫，避免重复显示系统消息
-	Mode          CollaborationMode // 新增：当前协作模式
-	ModeConfig    *ModeConfig       // 新增：模式配置
-	ModeState     *ModeState        // 新增：模式状态
-	WorkspaceID   string            // 新增：关联的工作区 ID
-	mu            sync.RWMutex
+	ID             string
+	Name           string
+	Summary        string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	MessageCount   int
+	Scheduler      *Scheduler
+	SystemMessages []Message           // 仅存 system 消息（user/cat 消息由 Session Chain 管理）
+	CallHistory    []CallHistoryItem
+	JoinedCats     map[string]bool     // 记录已加入的猫猫，避免重复显示系统消息
+	Mode           CollaborationMode   // 新增：当前协作模式
+	ModeConfig     *ModeConfig         // 新增：模式配置
+	ModeState      *ModeState          // 新增：模式状态
+	WorkspaceID    string              // 新增：关联的工作区 ID
+	mu             sync.RWMutex
 }
 
 // Message 消息结构
@@ -156,6 +158,12 @@ func NewSessionManager(configPath string) (*SessionManager, error) {
 	// 创建工作区管理器
 	workspaceManager := NewWorkspaceManager(rdb, ctx)
 
+	// 创建 Session Chain 管理器
+	chainManager, err := NewSessionChainManager("data/session_chains")
+	if err != nil {
+		LogWarn("[API] 创建 SessionChainManager 失败: %v（Session Chain 功能不可用）", err)
+	}
+
 	sm := &SessionManager{
 		sessions:         make(map[string]*SessionContext),
 		config:           config,
@@ -165,6 +173,7 @@ func NewSessionManager(configPath string) (*SessionManager, error) {
 		orchestrator:     orchestrator,
 		wsHub:            wsHub,
 		workspaceManager: workspaceManager,
+		chainManager:     chainManager,
 	}
 
 	// 启动结果监听器
@@ -217,7 +226,7 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 		UpdatedAt:    time.Now(),
 		MessageCount: 0,
 		Scheduler:    scheduler,
-		Messages:     make([]Message, 0),
+		SystemMessages: make([]Message, 0),
 		CallHistory:  make([]CallHistoryItem, 0),
 		JoinedCats:   make(map[string]bool), // 初始化已加入猫猫的映射
 		Mode:         mode,
@@ -246,7 +255,7 @@ func (sm *SessionManager) CreateSession() (*Session, error) {
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 	}
-	ctx.Messages = append(ctx.Messages, welcomeMsg)
+	ctx.SystemMessages = append(ctx.SystemMessages, welcomeMsg)
 
 	// 先解锁，再保存会话到 Redis（避免死锁）
 	sm.mu.Unlock()
@@ -380,7 +389,7 @@ func (sm *SessionManager) DeleteSession(sessionID string) error {
 	return nil
 }
 
-// GetMessages 获取会话消息
+// GetMessages 获取会话消息（从 Session Chain 读取 user/cat，合并内存中的 system 消息）
 func (sm *SessionManager) GetMessages(sessionID string) ([]Message, error) {
 	sm.mu.RLock()
 	ctx, exists := sm.sessions[sessionID]
@@ -390,10 +399,30 @@ func (sm *SessionManager) GetMessages(sessionID string) ([]Message, error) {
 		return nil, fmt.Errorf("会话不存在")
 	}
 
-	ctx.mu.RLock()
-	defer ctx.mu.RUnlock()
+	// 从 Session Chain 读取 user/cat 消息
+	messages := make([]Message, 0)
+	if sm.chainManager != nil {
+		events, err := sm.chainManager.GetAllEvents(sessionID)
+		if err != nil {
+			LogWarn("[API] 从 Session Chain 读取消息失败: %v", err)
+		} else {
+			for _, ev := range events {
+				messages = append(messages, sm.eventToMessage(ev, sessionID))
+			}
+		}
+	}
 
-	return ctx.Messages, nil
+	// 合并内存中的 system 消息
+	ctx.mu.RLock()
+	messages = append(messages, ctx.SystemMessages...)
+	ctx.mu.RUnlock()
+
+	// 按时间排序
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].Timestamp.Before(messages[j].Timestamp)
+	})
+
+	return messages, nil
 }
 
 // SendMessage 发送消息
@@ -426,13 +455,27 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 	}
-	ctx.Messages = append(ctx.Messages, userMsg)
 	ctx.MessageCount++
 	ctx.UpdatedAt = time.Now()
 	LogDebug("[API] 已添加用户消息: %s", userMsg.ID)
 
 	// 通过 WebSocket 推送新消息
 	sm.wsHub.BroadcastToSession(sessionID, "message", userMsg)
+
+	// 写入 Session Chain（用户消息）
+	if sm.chainManager != nil {
+		sm.chainManager.GetOrCreateChain(sessionID)
+		if err := sm.chainManager.AppendEvent(sessionID, SessionEvent{
+			Type:    SCEventUser,
+			Sender:  "user",
+			Content: req.Content,
+		}); err != nil {
+			LogWarn("[API] 写入 Session Chain 失败: %v", err)
+		} else {
+			// 推送更新后的 chain status
+			sm.pushChainStatus(sessionID)
+		}
+	}
 
 	// 自动保存会话
 	sm.AutoSaveSession(sessionID)
@@ -475,7 +518,7 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 					Timestamp: time.Now(),
 					SessionID: sessionID,
 				}
-				ctx.Messages = append(ctx.Messages, systemMsg)
+				ctx.SystemMessages = append(ctx.SystemMessages, systemMsg)
 				ctx.JoinedCats[catID] = true
 				LogDebug("[API] 已添加系统消息: %s", systemMsg.ID)
 
@@ -525,28 +568,33 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 	return &userMsg, nil
 }
 
-// GetMessageStats 获取消息统计
+// GetMessageStats 获取消息统计（从 Session Chain 读取）
 func (sm *SessionManager) GetMessageStats(sessionID string) (*MessageStats, error) {
 	sm.mu.RLock()
-	ctx, exists := sm.sessions[sessionID]
+	_, exists := sm.sessions[sessionID]
 	sm.mu.RUnlock()
 
 	if !exists {
 		return nil, fmt.Errorf("会话不存在")
 	}
 
-	ctx.mu.RLock()
-	defer ctx.mu.RUnlock()
-
+	totalMessages := 0
 	catMessages := 0
-	for _, msg := range ctx.Messages {
-		if msg.Type == "cat" {
-			catMessages++
+
+	if sm.chainManager != nil {
+		events, err := sm.chainManager.GetAllEvents(sessionID)
+		if err == nil {
+			totalMessages = len(events)
+			for _, ev := range events {
+				if ev.Type == SCEventCat {
+					catMessages++
+				}
+			}
 		}
 	}
 
 	return &MessageStats{
-		TotalMessages: len(ctx.Messages),
+		TotalMessages: totalMessages,
 		CatMessages:   catMessages,
 	}, nil
 }
@@ -850,7 +898,7 @@ func (sm *SessionManager) handleSwitchMode(c *gin.Context) {
 		Timestamp: time.Now(),
 		SessionID: sessionID,
 	}
-	ctx.Messages = append(ctx.Messages, systemMsg)
+	ctx.SystemMessages = append(ctx.SystemMessages, systemMsg)
 	ctx.mu.Unlock()
 
 	// 自动保存会话
@@ -976,6 +1024,9 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 		api.PUT("/workspaces/:workspaceId", sm.handleUpdateWorkspace)
 		api.DELETE("/workspaces/:workspaceId", sm.handleDeleteWorkspace)
 
+		// Session Chain 状态
+		api.GET("/sessions/:sessionId/chain-status", sm.handleGetChainStatus)
+
 		// 部署管理
 		api.POST("/workspaces/:workspaceId/deploy-test", sm.handleDeployToTest)
 		api.POST("/deployments/:deploymentId/promote", sm.handlePromoteToProduction)
@@ -984,6 +1035,174 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 	}
 
 	return r
+}
+
+// SessionChainStatusResponse Session Chain 状态响应
+type SessionChainStatusResponse struct {
+	ThreadID      string                    `json:"threadId"`
+	Sessions      []SessionChainItemResponse `json:"sessions"`
+	ActiveSession *ActiveSessionResponse    `json:"activeSession"`
+	TotalEvents   int                       `json:"totalEvents"`
+	TotalSessions int                       `json:"totalSessions"`
+}
+
+// SessionChainItemResponse 单个 Session 的状态
+type SessionChainItemResponse struct {
+	ID         string  `json:"id"`
+	SeqNo      int     `json:"seqNo"`
+	Status     string  `json:"status"`
+	EventCount int     `json:"eventCount"`
+	TokenCount int     `json:"tokenCount"`
+	Summary    *string `json:"summary"`
+	CreatedAt  string  `json:"createdAt"`
+	SealedAt   *string `json:"sealedAt"`
+}
+
+// ActiveSessionResponse 活跃 Session 的详细状态
+type ActiveSessionResponse struct {
+	ID                  string  `json:"id"`
+	SeqNo               int     `json:"seqNo"`
+	EventCount          int     `json:"eventCount"`
+	TokenCount          int     `json:"tokenCount"`
+	MaxTokens           int     `json:"maxTokens"`
+	UsagePercent        float64 `json:"usagePercent"`
+	MaxEventsPerSession int     `json:"maxEventsPerSession"`
+}
+
+// handleGetChainStatus 获取 Session Chain 状态
+func (sm *SessionManager) handleGetChainStatus(c *gin.Context) {
+	sessionID := c.Param("sessionId")
+
+	if sm.chainManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Session Chain 功能未启用"})
+		return
+	}
+
+	// 获取或创建 Chain
+	meta, err := sm.chainManager.GetOrCreateChain(sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取 Session Chain 失败: %v", err)})
+		return
+	}
+
+	// 获取所有 Session
+	sessions, err := sm.chainManager.ListSessions(sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取 Session 列表失败: %v", err)})
+		return
+	}
+
+	// 构建响应
+	response := SessionChainStatusResponse{
+		ThreadID:      sessionID,
+		TotalEvents:   meta.TotalEvents,
+		TotalSessions: meta.SessionCount,
+		Sessions:      make([]SessionChainItemResponse, 0, len(sessions)),
+	}
+
+	// 默认配置
+	maxTokens := 200000
+	maxEvents := 500
+
+	for _, s := range sessions {
+		item := SessionChainItemResponse{
+			ID:         s.ID,
+			SeqNo:      s.SeqNo,
+			Status:     string(s.Status),
+			EventCount: s.EventCount,
+			TokenCount: s.TokenCount,
+			CreatedAt:  s.CreatedAt.Format(time.RFC3339),
+		}
+		if s.Summary != "" {
+			summary := s.Summary
+			item.Summary = &summary
+		}
+		if s.SealedAt != nil {
+			sealedAt := s.SealedAt.Format(time.RFC3339)
+			item.SealedAt = &sealedAt
+		}
+		response.Sessions = append(response.Sessions, item)
+
+		// 活跃 Session 的详细状态
+		if s.Status == SCSessionActive {
+			estimator := NewContextTokenEstimator(maxTokens, maxEvents)
+			report := estimator.EstimateSessionUsage(s, nil)
+			response.ActiveSession = &ActiveSessionResponse{
+				ID:                  s.ID,
+				SeqNo:               s.SeqNo,
+				EventCount:          s.EventCount,
+				TokenCount:          s.TokenCount,
+				MaxTokens:           report.MaxTokens,
+				UsagePercent:        report.UsagePercent,
+				MaxEventsPerSession: report.MaxEventsPerSession,
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// pushChainStatus 通过 WebSocket 推送 Session Chain 状态更新
+func (sm *SessionManager) pushChainStatus(sessionID string) {
+	if sm.chainManager == nil || sm.wsHub == nil {
+		return
+	}
+
+	meta, err := sm.chainManager.GetOrCreateChain(sessionID)
+	if err != nil {
+		return
+	}
+
+	sessions, err := sm.chainManager.ListSessions(sessionID)
+	if err != nil {
+		return
+	}
+
+	maxTokens := 200000
+	maxEvents := 500
+
+	response := SessionChainStatusResponse{
+		ThreadID:      sessionID,
+		TotalEvents:   meta.TotalEvents,
+		TotalSessions: meta.SessionCount,
+		Sessions:      make([]SessionChainItemResponse, 0, len(sessions)),
+	}
+
+	for _, s := range sessions {
+		item := SessionChainItemResponse{
+			ID:         s.ID,
+			SeqNo:      s.SeqNo,
+			Status:     string(s.Status),
+			EventCount: s.EventCount,
+			TokenCount: s.TokenCount,
+			CreatedAt:  s.CreatedAt.Format(time.RFC3339),
+		}
+		if s.Summary != "" {
+			summary := s.Summary
+			item.Summary = &summary
+		}
+		if s.SealedAt != nil {
+			sealedAt := s.SealedAt.Format(time.RFC3339)
+			item.SealedAt = &sealedAt
+		}
+		response.Sessions = append(response.Sessions, item)
+
+		if s.Status == SCSessionActive {
+			estimator := NewContextTokenEstimator(maxTokens, maxEvents)
+			report := estimator.EstimateSessionUsage(s, nil)
+			response.ActiveSession = &ActiveSessionResponse{
+				ID:                  s.ID,
+				SeqNo:               s.SeqNo,
+				EventCount:          s.EventCount,
+				TokenCount:          s.TokenCount,
+				MaxTokens:           report.MaxTokens,
+				UsagePercent:        report.UsagePercent,
+				MaxEventsPerSession: report.MaxEventsPerSession,
+			}
+		}
+	}
+
+	sm.wsHub.BroadcastToSession(sessionID, "chain_status", response)
 }
 
 // loadConfig 加载配置（简化版）
@@ -1097,7 +1316,6 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 		Sender:    sm.getCatInfoByName(task.AgentName),
 	}
 
-	ctx.Messages = append(ctx.Messages, agentMsg)
 	ctx.MessageCount++
 	ctx.UpdatedAt = time.Now()
 
@@ -1105,6 +1323,20 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 
 	// 通过 WebSocket 推送猫猫消息
 	sm.wsHub.BroadcastToSession(task.SessionID, "message", agentMsg)
+
+	// 写入 Session Chain（Agent 回复）
+	if sm.chainManager != nil {
+		sm.chainManager.GetOrCreateChain(task.SessionID)
+		if err := sm.chainManager.AppendEvent(task.SessionID, SessionEvent{
+			Type:    SCEventCat,
+			Sender:  task.AgentName,
+			Content: task.Result,
+		}); err != nil {
+			LogWarn("[API] Agent 回复写入 Session Chain 失败: %v", err)
+		} else {
+			sm.pushChainStatus(task.SessionID)
+		}
+	}
 
 	// 更新调用历史中的 Response
 	sm.updateCallHistoryResponse(ctx, task.AgentName, task.Result)
@@ -1137,7 +1369,7 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 				Timestamp: time.Now(),
 				SessionID: task.SessionID,
 			}
-			ctx.Messages = append(ctx.Messages, systemMsg)
+			ctx.SystemMessages = append(ctx.SystemMessages, systemMsg)
 			ctx.JoinedCats[catID] = true
 			LogDebug("[API] 猫猫互相调用 - 已添加系统消息: %s", systemMsg.ID)
 
@@ -1227,6 +1459,30 @@ func (sm *SessionManager) getCatInfoByName(name string) *Sender {
 		Name:   name,
 		Avatar: avatar,
 		Color:  catColorMap[name],
+	}
+}
+
+// eventToMessage 将 SessionEvent 转换为前端需要的 Message 格式
+func (sm *SessionManager) eventToMessage(ev SessionEvent, threadID string) Message {
+	msgType := "user"
+	var sender *Sender
+	if ev.Type == SCEventCat {
+		msgType = "cat"
+		sender = sm.getCatInfoByName(ev.Sender)
+	} else {
+		sender = &Sender{
+			ID:     "user_001",
+			Name:   "用户",
+			Avatar: sm.config.User.Avatar,
+		}
+	}
+	return Message{
+		ID:        fmt.Sprintf("msg_ev_%d", ev.EventNo),
+		Type:      msgType,
+		Content:   ev.Content,
+		Sender:    sender,
+		Timestamp: ev.Timestamp,
+		SessionID: threadID,
 	}
 }
 

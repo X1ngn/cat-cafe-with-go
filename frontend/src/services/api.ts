@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Cat, Message, Session, MessageStats, CallHistory, ModeInfo, SessionMode, Workspace } from '@/types';
+import { Cat, Message, Session, MessageStats, CallHistory, ModeInfo, SessionMode, Workspace, SessionChainStatus } from '@/types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -86,6 +86,12 @@ export const workspaceAPI = {
 
   // 删除工作区
   deleteWorkspace: (workspaceId: string) => api.delete(`/workspaces/${workspaceId}`),
+};
+
+export const chainAPI = {
+  // 获取 Session Chain 状态
+  getChainStatus: (sessionId: string) =>
+    api.get<SessionChainStatus>(`/sessions/${sessionId}/chain-status`),
 };
 
 export default api;

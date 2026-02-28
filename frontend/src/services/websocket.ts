@@ -1,6 +1,6 @@
-import { Message, CallHistory } from '@/types';
+import { Message, CallHistory, SessionChainStatus } from '@/types';
 
-type WSMessageType = 'message' | 'history' | 'stats' | 'cats';
+type WSMessageType = 'message' | 'history' | 'stats' | 'cats' | 'chain_status';
 
 interface WSMessage {
   type: WSMessageType;
@@ -11,6 +11,7 @@ interface WSMessage {
 
 type MessageHandler = (message: Message) => void;
 type HistoryHandler = (history: CallHistory[]) => void;
+type ChainStatusHandler = (status: SessionChainStatus) => void;
 
 export class WebSocketService {
   private ws: WebSocket | null = null;
@@ -18,6 +19,7 @@ export class WebSocketService {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private messageHandlers: Set<MessageHandler> = new Set();
   private historyHandlers: Set<HistoryHandler> = new Set();
+  private chainStatusHandlers: Set<ChainStatusHandler> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
 
@@ -103,6 +105,9 @@ export class WebSocketService {
       case 'history':
         this.historyHandlers.forEach(handler => handler(wsMessage.data));
         break;
+      case 'chain_status':
+        this.chainStatusHandlers.forEach(handler => handler(wsMessage.data));
+        break;
       default:
         console.warn('[WS] 未知消息类型:', wsMessage.type);
     }
@@ -116,6 +121,11 @@ export class WebSocketService {
   onHistory(handler: HistoryHandler) {
     this.historyHandlers.add(handler);
     return () => this.historyHandlers.delete(handler);
+  }
+
+  onChainStatus(handler: ChainStatusHandler) {
+    this.chainStatusHandlers.add(handler);
+    return () => this.chainStatusHandlers.delete(handler);
   }
 
   disconnect() {

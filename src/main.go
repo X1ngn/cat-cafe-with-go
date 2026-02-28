@@ -141,6 +141,18 @@ func main() {
 			os.Exit(1)
 		}
 
+		// 创建 SessionChainManager（如果 Agent 配置了 context_mode）
+		var chainManager *SessionChainManager
+		if agentConfig.ContextMode != "" {
+			dataDir := "data/session_chains"
+			var err error
+			chainManager, err = NewSessionChainManager(dataDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️  创建 SessionChainManager 失败: %v（将使用旧逻辑）\n", err)
+				chainManager = nil
+			}
+		}
+
 		// 获取系统提示词
 		systemPrompt, err := scheduler.GetSystemPrompt(*agentName)
 		if err != nil {
@@ -156,6 +168,7 @@ func main() {
 			scheduler.config.Redis.Password,
 			scheduler.config.Redis.DB,
 			workspaceManager, // 传递 WorkspaceManager
+			chainManager,     // 传递 SessionChainManager
 		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "创建 Agent 工作进程失败: %v\n", err)
