@@ -6,6 +6,7 @@ import { Avatar } from '@/components/common/Avatar';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { MessageStats, CallHistory } from '@/types';
 import { SessionChainPanel } from './SessionChainPanel';
+import { HindsightPanel } from './HindsightPanel';
 
 export const StatusBar: React.FC = () => {
   const { cats, setCats, currentSession } = useAppStore();
@@ -102,6 +103,9 @@ export const StatusBar: React.FC = () => {
 
       {/* Session Chain 状态 */}
       <SessionChainPanel />
+
+      {/* Hindsight 长期记忆状态 */}
+      <HindsightPanel />
 
       {/* 调用历史区 */}
       <div className="bg-white border border-gray-200 rounded-xl p-6">

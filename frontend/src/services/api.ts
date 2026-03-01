@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Cat, Message, Session, MessageStats, CallHistory, ModeInfo, SessionMode, Workspace, SessionChainStatus } from '@/types';
+import { Cat, Message, Session, MessageStats, CallHistory, ModeInfo, SessionMode, Workspace, SessionChainStatus, HindsightHealth } from '@/types';
 
 const api = axios.create({
   baseURL: '/api',
@@ -92,6 +92,10 @@ export const chainAPI = {
   // 获取 Session Chain 状态
   getChainStatus: (sessionId: string) =>
     api.get<SessionChainStatus>(`/sessions/${sessionId}/chain-status`),
+};
+
+export const hindsightAPI = {
+  getHealth: () => api.get<HindsightHealth>('/hindsight/health'),
 };
 
 export default api;

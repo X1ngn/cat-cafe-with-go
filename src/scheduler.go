@@ -26,9 +26,10 @@ type AgentConfig struct {
 
 // Config 系统配置
 type Config struct {
-	Agents []AgentConfig `yaml:"agents"`
-	Redis  RedisConfig   `yaml:"redis"`
-	User   UserConfig    `yaml:"user"`
+	Agents    []AgentConfig    `yaml:"agents"`
+	Redis     RedisConfig      `yaml:"redis"`
+	User      UserConfig       `yaml:"user"`
+	Hindsight *HindsightConfig `yaml:"hindsight,omitempty"`
 }
 
 // UserConfig 用户配置

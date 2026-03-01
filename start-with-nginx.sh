@@ -45,6 +45,56 @@ else
     echo "🌐 直连模式: API 服务器将在 :8080 启动"
 fi
 
+# 启动 Hindsight 长期记忆服务（Docker）
+echo ""
+echo "🧠 启动 Hindsight 长期记忆服务..."
+HINDSIGHT_ENV="$(cd "$(dirname "$0")/hindsight" && pwd)/.env"
+HINDSIGHT_CONTAINER="cat-cafe-hindsight"
+
+# 检查 Docker 是否可用
+if ! command -v docker &> /dev/null; then
+    echo "⚠️  Docker 未安装，跳过 Hindsight 启动"
+    HINDSIGHT_STARTED=false
+elif [ ! -f "$HINDSIGHT_ENV" ]; then
+    echo "⚠️  Hindsight .env 不存在，跳过启动（请先配置 hindsight/.env）"
+    HINDSIGHT_STARTED=false
+else
+    # 读取 .env 中的 API key
+    OPENAI_API_KEY=$(grep '^HINDSIGHT_API_LLM_API_KEY=' "$HINDSIGHT_ENV" | cut -d'=' -f2-)
+
+    # 如果已有同名容器在跑，跳过启动
+    if docker ps --format '{{.Names}}' | grep -q "^${HINDSIGHT_CONTAINER}$"; then
+        echo "✓ Hindsight 容器已在运行"
+        HINDSIGHT_STARTED=true
+    else
+        # 清理同名的已停止容器
+        docker rm -f "$HINDSIGHT_CONTAINER" 2>/dev/null
+
+        docker run -d --name "$HINDSIGHT_CONTAINER" \
+            -p 8888:8888 -p 9999:9999 \
+            -e HINDSIGHT_API_LLM_API_KEY="$OPENAI_API_KEY" \
+            -v "$HOME/.hindsight-docker:/home/hindsight/.pg0" \
+            ghcr.io/vectorize-io/hindsight:latest > /dev/null 2>&1
+
+        if [ $? -eq 0 ]; then
+            echo "✓ Hindsight Docker 容器已启动 (Port: 8888)"
+            HINDSIGHT_STARTED=true
+            # 等待服务就绪
+            echo "  等待 Hindsight 就绪..."
+            for i in $(seq 1 15); do
+                if curl -s http://localhost:8888/health > /dev/null 2>&1; then
+                    echo "  ✓ Hindsight 已就绪"
+                    break
+                fi
+                sleep 2
+            done
+        else
+            echo "⚠️  Hindsight Docker 启动失败，查看: docker logs $HINDSIGHT_CONTAINER"
+            HINDSIGHT_STARTED=false
+        fi
+    fi
+fi
+
 # 启动 API 服务器
 echo ""
 echo "🚀 启动 API 服务器..."
@@ -75,6 +125,9 @@ echo "✅ 所有服务已启动！"
 echo ""
 echo "📝 进程信息:"
 echo "   API 服务器: $API_PID (端口: $API_PORT)"
+if [ "$HINDSIGHT_STARTED" = true ]; then
+    echo "   Hindsight:  Docker 容器 $HINDSIGHT_CONTAINER (端口: 8888)"
+fi
 echo "   花花: $AGENT1_PID"
 echo "   薇薇: $AGENT2_PID"
 echo "   小乔: $AGENT3_PID"
@@ -86,6 +139,10 @@ if [ "$USE_NGINX" = true ]; then
     echo "   直接访问: http://localhost:$API_PORT"
 else
     echo "🌐 API 地址: http://localhost:$API_PORT"
+fi
+
+if [ "$HINDSIGHT_STARTED" = true ]; then
+    echo "🧠 Hindsight: http://localhost:8888"
 fi
 
 echo "📖 日志目录: logs/"
@@ -104,7 +161,10 @@ echo "$AGENT1_PID" > logs/.agent1.pid
 echo "$AGENT2_PID" > logs/.agent2.pid
 echo "$AGENT3_PID" > logs/.agent3.pid
 
+# 收集所有需要停止的 PID
+ALL_PIDS="$API_PID $AGENT1_PID $AGENT2_PID $AGENT3_PID"
+
 # 等待中断信号
-trap "echo ''; echo '🛑 停止所有服务...'; kill $API_PID $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null; rm -f logs/.api.pid logs/.agent1.pid logs/.agent2.pid logs/.agent3.pid; echo '✓ 已停止'; exit 0" INT TERM
+trap "echo ''; echo '🛑 停止所有服务...'; kill $ALL_PIDS 2>/dev/null; if [ '$HINDSIGHT_STARTED' = true ]; then docker stop $HINDSIGHT_CONTAINER > /dev/null 2>&1; fi; rm -f logs/.api.pid logs/.agent1.pid logs/.agent2.pid logs/.agent3.pid; echo '✓ 已停止'; exit 0" INT TERM
 
 wait

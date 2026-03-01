@@ -33,11 +33,17 @@ func InvokeAgentWithMCP(cliType, prompt, aiSessionID, workDir, mcpConfigPath str
 func getDefaultOptions(cliType string) AgentOptions {
 	switch cliType {
 	case "claude":
-		return AgentOptions{}
+		return AgentOptions{
+			PermissionMode: "dontAsk",
+			AllowedTools:   "mcp__hindsight__*,mcp__session-chain__*,mcp__github__*,mcp__figma__*,mcp__ide__*",
+		}
 	case "codex":
-		return AgentOptions{}
+		return AgentOptions{} // 已在 invoke.go 中硬编码 --full-auto
 	case "gemini":
-		return AgentOptions{}
+		return AgentOptions{
+			ApprovalMode: "yolo",
+			AllowedTools: "mcp__hindsight__*,mcp__session-chain__*,mcp__TalkToFigma__*",
+		}
 	default:
 		return AgentOptions{}
 	}
@@ -46,7 +52,9 @@ func getDefaultOptions(cliType string) AgentOptions {
 // GenerateMCPConfig 生成 MCP 配置文件，返回临时文件路径
 // threadID: 当前对话的 Thread ID
 // binPath: cat-cafe 可执行文件路径（为空时使用默认值）
-func GenerateMCPConfig(threadID, binPath string) (string, error) {
+// agentName: Agent 名称（用于生成 hindsight bank ID）
+// hindsightCfg: Hindsight 配置（为 nil 或 Enabled=false 时不生成 hindsight 条目）
+func GenerateMCPConfig(threadID, binPath, agentName string, hindsightCfg *HindsightConfig) (string, error) {
 	if binPath == "" {
 		// 尝试找到当前可执行文件路径
 		exe, err := os.Executable()
@@ -57,14 +65,32 @@ func GenerateMCPConfig(threadID, binPath string) (string, error) {
 		}
 	}
 
-	config := map[string]interface{}{
-		"mcpServers": map[string]interface{}{
-			"session-chain": map[string]interface{}{
-				"command": binPath,
-				"args":    []string{"--mode", "mcp", "--thread", threadID},
-				"type":    "stdio",
-			},
+	servers := map[string]interface{}{
+		"session-chain": map[string]interface{}{
+			"command": binPath,
+			"args":    []string{"--mode", "mcp", "--thread", threadID},
+			"type":    "stdio",
 		},
+	}
+
+	// 追加 hindsight MCP 条目
+	if hindsightCfg != nil && hindsightCfg.Enabled && hindsightCfg.BaseURL != "" {
+		bankID := BankIDForAgent(agentName)
+		mcpURL := fmt.Sprintf("%s/mcp/%s/", hindsightCfg.BaseURL, bankID)
+		entry := map[string]interface{}{
+			"url":  mcpURL,
+			"type": "http",
+		}
+		if hindsightCfg.Token != "" {
+			entry["headers"] = map[string]string{
+				"Authorization": "Bearer " + hindsightCfg.Token,
+			}
+		}
+		servers["hindsight"] = entry
+	}
+
+	config := map[string]interface{}{
+		"mcpServers": servers,
 	}
 
 	data, err := json.MarshalIndent(config, "", "  ")
