@@ -21,6 +21,16 @@ else
     echo "  没有运行中的 cat-cafe 进程"
 fi
 
+# 停止 Hindsight Docker 容器
+HINDSIGHT_CONTAINER="cat-cafe-hindsight"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${HINDSIGHT_CONTAINER}$"; then
+    docker stop "$HINDSIGHT_CONTAINER" > /dev/null 2>&1
+    docker rm "$HINDSIGHT_CONTAINER" > /dev/null 2>&1
+    echo "✓ 已停止 Hindsight Docker 容器"
+else
+    echo "  没有运行中的 Hindsight 容器"
+fi
+
 # 杀掉监听端口的进程（兜底）
 kill_port() {
     local port=$1

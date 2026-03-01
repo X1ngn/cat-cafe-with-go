@@ -193,8 +193,9 @@ func main() {
 			scheduler.config.Redis.Addr,
 			scheduler.config.Redis.Password,
 			scheduler.config.Redis.DB,
-			workspaceManager, // 传递 WorkspaceManager
-			chainManager,     // 传递 SessionChainManager
+			workspaceManager,
+			chainManager,
+			scheduler.config.Hindsight,
 		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "创建 Agent 工作进程失败: %v\n", err)

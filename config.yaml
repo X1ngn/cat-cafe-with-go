@@ -28,5 +28,9 @@ redis:
   password: ""
   db: 0
 
+hindsight:
+  enabled: true
+  base_url: "http://localhost:8888"
+
 user:
   avatar: "/images/owner.png"

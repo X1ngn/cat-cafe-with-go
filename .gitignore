@@ -64,3 +64,4 @@ package-lock.json
 test/prompts_test/
 images/
 *.eddx
+data/session_chains

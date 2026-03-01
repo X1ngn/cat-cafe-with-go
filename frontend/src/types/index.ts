@@ -106,3 +106,9 @@ export interface SessionChainStatus {
   totalEvents: number;
   totalSessions: number;
 }
+
+// Hindsight 长期记忆相关类型
+export interface HindsightHealth {
+  status: 'connected' | 'unreachable' | 'disabled';
+  base_url?: string;
+}

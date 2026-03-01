@@ -26,10 +26,11 @@ type AgentWorker struct {
 	chatLogFile      string
 	workspaceManager *WorkspaceManager      // 工作区管理器
 	chainManager     *SessionChainManager   // Session Chain 管理器
+	hindsightCfg     *HindsightConfig       // Hindsight 长期记忆配置
 }
 
 // NewAgentWorker 创建 Agent 工作进程
-func NewAgentWorker(config *AgentConfig, systemPrompt string, redisAddr, redisPassword string, redisDB int, workspaceManager *WorkspaceManager, chainManager *SessionChainManager) (*AgentWorker, error) {
+func NewAgentWorker(config *AgentConfig, systemPrompt string, redisAddr, redisPassword string, redisDB int, workspaceManager *WorkspaceManager, chainManager *SessionChainManager, hindsightCfg *HindsightConfig) (*AgentWorker, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     redisAddr,
 		Password: redisPassword,
@@ -58,8 +59,9 @@ func NewAgentWorker(config *AgentConfig, systemPrompt string, redisAddr, redisPa
 		consumerGroup:    consumerGroup,
 		consumerName:     consumerName,
 		chatLogFile:      "chat_history.jsonl",
-		workspaceManager: workspaceManager, // 新增：注入工作区管理器
-		chainManager:     chainManager,     // 新增：注入 Session Chain 管理器
+		workspaceManager: workspaceManager,
+		chainManager:     chainManager,
+		hindsightCfg:     hindsightCfg,
 	}
 
 	// 创建消费者组
@@ -244,7 +246,7 @@ func (w *AgentWorker) executeTask(task *TaskMessage) (string, error) {
 	var response, newSessionID string
 	var invokeErr error
 	if w.config.ContextMode != "" && task.SessionID != "" {
-		mcpConfigPath, mcpErr := GenerateMCPConfig(task.SessionID, "")
+		mcpConfigPath, mcpErr := GenerateMCPConfig(task.SessionID, "", w.config.Name, w.hindsightCfg)
 		if mcpErr != nil {
 			LogWarn("[Agent-%s] 生成 MCP 配置失败: %v（将不注入 MCP）", w.config.Name, mcpErr)
 			response, newSessionID, invokeErr = InvokeAgent(w.config.CLIType, fullPrompt, aiSessionID, workDir)

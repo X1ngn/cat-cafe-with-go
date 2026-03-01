@@ -1027,6 +1027,9 @@ func (sm *SessionManager) SetupRouter() *gin.Engine {
 		// Session Chain 状态
 		api.GET("/sessions/:sessionId/chain-status", sm.handleGetChainStatus)
 
+		// Hindsight 长期记忆状态
+		api.GET("/hindsight/health", sm.handleHindsightHealth)
+
 		// 部署管理
 		api.POST("/workspaces/:workspaceId/deploy-test", sm.handleDeployToTest)
 		api.POST("/deployments/:deploymentId/promote", sm.handlePromoteToProduction)
@@ -1140,6 +1143,30 @@ func (sm *SessionManager) handleGetChainStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// handleHindsightHealth 检查 Hindsight 服务健康状态
+func (sm *SessionManager) handleHindsightHealth(c *gin.Context) {
+	cfg := sm.config.Hindsight
+	if cfg == nil || !cfg.Enabled {
+		c.JSON(http.StatusOK, gin.H{"status": "disabled"})
+		return
+	}
+
+	healthURL := cfg.BaseURL + "/health"
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"status": "unreachable", "base_url": cfg.BaseURL})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		c.JSON(http.StatusOK, gin.H{"status": "connected", "base_url": cfg.BaseURL})
+	} else {
+		c.JSON(http.StatusOK, gin.H{"status": "unreachable", "base_url": cfg.BaseURL})
+	}
 }
 
 // pushChainStatus 通过 WebSocket 推送 Session Chain 状态更新
