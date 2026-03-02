@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // AgentOptions 包含所有可能的代理CLI配置选项
@@ -105,7 +106,9 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 		}
 		go func() {
 			defer stdin.Close()
-			stdin.Write([]byte(prompt))
+			// 确保 prompt 是有效的 UTF-8
+			validPrompt := ensureValidUTF8(prompt)
+			stdin.Write([]byte(validPrompt))
 		}()
 	}
 
@@ -228,4 +231,16 @@ func InvokeCLI(cliName, prompt string, options AgentOptions) (string, string, er
 	}
 
 	return assistantResponse, sessionID, nil
+}
+
+// ensureValidUTF8 确保字符串是有效的 UTF-8 编码
+// 将所有无效的 UTF-8 字节序列替换为 Unicode 替换字符 (U+FFFD)
+func ensureValidUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+
+	// 使用 strings.ToValidUTF8 替换无效字符
+	// 替换字符使用 � (U+FFFD, Unicode replacement character)
+	return strings.ToValidUTF8(s, "�")
 }
