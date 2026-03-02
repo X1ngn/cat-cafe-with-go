@@ -8,7 +8,7 @@ interface MessageBubbleProps {
   message: Message;
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+export const MessageBubble: React.FC<MessageBubbleProps> = React.memo(({ message }) => {
   if (message.type === 'system') {
     return (
       <div className="flex justify-center">
@@ -43,4 +43,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       <Avatar color="#336699" size="md" className="rounded-xl" avatar={user?.avatar} />
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+  // 自定义比较函数：只有当 message.id 和 message.content 都相同时才认为相等
+  return prevProps.message.id === nextProps.message.id &&
+         prevProps.message.content === nextProps.message.content;
+});

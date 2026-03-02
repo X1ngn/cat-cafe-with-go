@@ -24,13 +24,25 @@ export const MessageInput: React.FC = () => {
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeInfo[]>([]);
   const [loadingMode, setLoadingMode] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const modeMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadAvailableModes();
     loadCats();
   }, []);
+
+  // 自动调整 textarea 高度
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (textarea) {
+      // 重置高度以获取正确的 scrollHeight
+      textarea.style.height = '24px';
+      // 设置新高度，最大 200px
+      const newHeight = Math.min(textarea.scrollHeight, 200);
+      textarea.style.height = `${newHeight}px`;
+    }
+  }, [inputValue]);
 
   const loadCats = async () => {
     try {
@@ -98,7 +110,7 @@ export const MessageInput: React.FC = () => {
     return '💬';
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     console.log('=== handleInputChange ===');
     console.log('新值:', value);
@@ -190,17 +202,17 @@ export const MessageInput: React.FC = () => {
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
 
-  const handleKeyUp = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // 监听方向键和其他导航键，检查光标位置
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
-      const target = e.target as HTMLInputElement;
+      const target = e.target as HTMLTextAreaElement;
       const cursorPosition = target.selectionStart || 0;
       const lastAtIndex = inputValue.lastIndexOf('@');
 
@@ -268,24 +280,28 @@ export const MessageInput: React.FC = () => {
         </div>
 
         {/* 输入框容器 */}
-        <div className="flex-1 bg-white border border-gray-200 rounded-[32px] flex items-center px-6 py-4">
+        <div className="flex-1 bg-white border border-gray-200 rounded-[32px] flex items-center px-6 py-3">
           {/* 输入框 */}
-          <input
+          <textarea
             ref={inputRef}
-            type="text"
             value={inputValue}
             onChange={handleInputChange}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             onKeyUp={handleKeyUp}
             placeholder="跟猫猫们说点什么... (@呼叫猫猫)"
-            className="flex-1 outline-none text-base"
+            className="flex-1 outline-none text-base resize-none overflow-y-auto"
+            rows={1}
+            style={{
+              minHeight: '24px',
+              maxHeight: '200px',
+            }}
           />
 
           {/* 发送按钮 */}
           <button
             onClick={handleSend}
             disabled={!inputValue.trim()}
-            className="w-12 h-12 bg-primary rounded-full flex items-center justify-center hover:bg-opacity-90 transition-colors disabled:opacity-50"
+            className="w-12 h-12 bg-primary rounded-full flex items-center justify-center hover:bg-opacity-90 transition-colors disabled:opacity-50 flex-shrink-0"
           >
             <span className="text-2xl">🐾</span>
           </button>
