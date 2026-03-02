@@ -34,7 +34,7 @@ func getDefaultOptions(cliType string) AgentOptions {
 	switch cliType {
 	case "claude":
 		return AgentOptions{
-			PermissionMode: "dontAsk",
+			PermissionMode: "bypassPermissions",
 			AllowedTools:   "mcp__hindsight__*,mcp__session-chain__*,mcp__github__*,mcp__figma__*,mcp__ide__*",
 		}
 	case "codex":
@@ -65,12 +65,27 @@ func GenerateMCPConfig(threadID, binPath, agentName string, hindsightCfg *Hindsi
 		}
 	}
 
-	servers := map[string]interface{}{
-		"session-chain": map[string]interface{}{
-			"command": binPath,
-			"args":    []string{"--mode", "mcp", "--thread", threadID},
-			"type":    "stdio",
-		},
+	// 从配置文件读取 MCP 服务器配置
+	servers := make(map[string]interface{})
+
+	// 读取 mcp_config.json
+	if data, err := os.ReadFile("mcp_config.json"); err == nil {
+		var config map[string]interface{}
+		if err := json.Unmarshal(data, &config); err == nil {
+			if mcpServers, ok := config["mcpServers"].(map[string]interface{}); ok {
+				// 复制配置文件中的 MCP 服务器
+				for k, v := range mcpServers {
+					servers[k] = v
+				}
+			}
+		}
+	}
+
+	// 添加/覆盖 session-chain MCP 服务器（动态生成）
+	servers["session-chain"] = map[string]interface{}{
+		"command": binPath,
+		"args":    []string{"--mode", "mcp", "--thread", threadID},
+		"type":    "stdio",
 	}
 
 	// 追加 hindsight MCP 条目
@@ -98,16 +113,16 @@ func GenerateMCPConfig(threadID, binPath, agentName string, hindsightCfg *Hindsi
 		return "", fmt.Errorf("序列化 MCP 配置失败: %w", err)
 	}
 
-	// 写入临时文件
-	tmpDir := filepath.Join(os.TempDir(), "cat-cafe-mcp")
-	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		return "", fmt.Errorf("创建 MCP 临时目录失败: %w", err)
+	// 写入 logs 目录下的 mcp-config-logs 文件夹
+	mcpDir := "logs/mcp-config-logs"
+	if err := os.MkdirAll(mcpDir, 0755); err != nil {
+		return "", fmt.Errorf("创建 MCP 配置目录失败: %w", err)
 	}
 
-	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("mcp_%s.json", threadID))
-	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+	mcpFile := filepath.Join(mcpDir, fmt.Sprintf("mcp_%s.json", threadID))
+	if err := os.WriteFile(mcpFile, data, 0644); err != nil {
 		return "", fmt.Errorf("写入 MCP 配置文件失败: %w", err)
 	}
 
-	return tmpFile, nil
+	return mcpFile, nil
 }

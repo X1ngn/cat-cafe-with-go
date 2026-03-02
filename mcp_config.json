@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "github-mcp-server",
+      "args": ["stdio"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "figma": {
+      "command": "bun",
+      "args": ["/Users/jesuswang/Downloads/cursor-talk-to-figma-mcp-main/src/talk_to_figma_mcp/server.ts"]
+    }
+  }
+}
