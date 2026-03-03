@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '@/stores/appStore';
-import { MessageBubble } from './MessageBubble';
+import { MessageList, MessageListHandle } from './MessageList';
 import { MessageInput } from './MessageInput';
 import ModeStatusBar from './ModeStatusBar';
 import { messageAPI, modeAPI } from '@/services/api';
@@ -9,11 +9,10 @@ import { Message } from '@/types';
 
 export const ChatArea: React.FC = () => {
   const currentSession = useAppStore(state => state.currentSession);
-  const messages = useAppStore(state => state.messages);
   const setMessages = useAppStore(state => state.setMessages);
   const sessionMode = useAppStore(state => state.sessionMode);
   const setSessionMode = useAppStore(state => state.setSessionMode);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageListRef = useRef<MessageListHandle>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef<boolean>(false);
 
@@ -22,39 +21,36 @@ export const ChatArea: React.FC = () => {
       loadMessages();
       loadSessionMode();
 
-      // 连接 WebSocket
       wsService.connect(currentSession.id);
 
-      // 监听新消息
       const unsubscribeMessage = wsService.onMessage((message: Message) => {
-        console.log('[ChatArea] 收到新消息:', message);
-        // 检查消息是否已存在，避免重复
+        console.log('[ChatArea] received new message:', message);
         const currentMessages = useAppStore.getState().messages;
         const exists = currentMessages.some(m => m.id === message.id);
         if (!exists) {
           setMessages([...currentMessages, message]);
+          if (!isUserScrollingRef.current) {
+            requestAnimationFrame(() => {
+              messageListRef.current?.scrollToBottom();
+            });
+          }
         }
       });
 
-      // 清理函数
       return () => {
         unsubscribeMessage();
       };
     }
   }, [currentSession]);
 
-  useEffect(() => {
-    // 只有在用户没有主动滚动时才自动滚动到底部
-    if (!isUserScrollingRef.current) {
-      scrollToBottom();
-    }
-  }, [messages]);
-
   const loadMessages = async () => {
     if (!currentSession) return;
     try {
       const response = await messageAPI.getMessages(currentSession.id);
       setMessages(response.data);
+      requestAnimationFrame(() => {
+        messageListRef.current?.scrollToBottom();
+      });
     } catch (error) {
       console.error('Failed to load messages:', error);
     }
@@ -70,19 +66,12 @@ export const ChatArea: React.FC = () => {
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const handleScroll = () => {
+  const handleScroll = useCallback(() => {
     if (!messagesContainerRef.current) return;
-
     const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px 容差
-
-    // 如果用户不在底部，标记为正在滚动
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
     isUserScrollingRef.current = !isAtBottom;
-  };
+  }, []);
 
   if (!currentSession) {
     return (
@@ -94,7 +83,6 @@ export const ChatArea: React.FC = () => {
 
   return (
     <div className="flex-1 bg-white flex flex-col">
-      {/* 工作区信息栏 */}
       {currentSession.workspacePath && (
         <div className="px-8 pt-4 pb-2">
           <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
@@ -107,26 +95,18 @@ export const ChatArea: React.FC = () => {
         </div>
       )}
 
-      {/* 模式状态栏 */}
       {sessionMode && (
         <div className="px-8 pt-2">
           <ModeStatusBar mode={sessionMode.mode} />
         </div>
       )}
 
-      {/* 消息列表 */}
-      <div
-        ref={messagesContainerRef}
+      <MessageList
+        ref={messageListRef}
+        containerRef={messagesContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-8 py-10 space-y-6"
-      >
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
+      />
 
-      {/* 输入区域 */}
       <MessageInput />
     </div>
   );
