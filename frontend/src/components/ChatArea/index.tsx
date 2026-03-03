@@ -8,7 +8,11 @@ import { wsService } from '@/services/websocket';
 import { Message } from '@/types';
 
 export const ChatArea: React.FC = () => {
-  const { currentSession, messages, setMessages, sessionMode, setSessionMode } = useAppStore();
+  const currentSession = useAppStore(state => state.currentSession);
+  const messages = useAppStore(state => state.messages);
+  const setMessages = useAppStore(state => state.setMessages);
+  const sessionMode = useAppStore(state => state.sessionMode);
+  const setSessionMode = useAppStore(state => state.setSessionMode);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef<boolean>(false);

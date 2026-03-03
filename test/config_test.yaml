@@ -1,0 +1,20 @@
+agents:
+  - name: "Agent_A"
+    pipe: "pipe_test_a"
+    exec_cmd: "echo"
+    system_prompt_path: "prompts_test/agent_a.md"
+
+  - name: "Agent_B"
+    pipe: "pipe_test_b"
+    exec_cmd: "echo"
+    system_prompt_path: "prompts_test/agent_b.md"
+
+  - name: "Agent_C"
+    pipe: "pipe_test_c"
+    exec_cmd: "echo"
+    system_prompt_path: "prompts_test/agent_c.md"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0

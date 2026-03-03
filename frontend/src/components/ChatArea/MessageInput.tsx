@@ -5,19 +5,17 @@ import { MentionMenu } from './MentionMenu';
 import { ModeInfo } from '@/types';
 
 export const MessageInput: React.FC = () => {
-  const {
-    currentSession,
-    inputValue,
-    setInputValue,
-    showMentionMenu,
-    setShowMentionMenu,
-    setMentionQuery,
-    setWaitingForReply,
-    sessionMode,
-    setSessionMode,
-    cats,
-    setCats,
-  } = useAppStore();
+  const currentSession = useAppStore(state => state.currentSession);
+  const inputValue = useAppStore(state => state.inputValue);
+  const setInputValue = useAppStore(state => state.setInputValue);
+  const showMentionMenu = useAppStore(state => state.showMentionMenu);
+  const setShowMentionMenu = useAppStore(state => state.setShowMentionMenu);
+  const setMentionQuery = useAppStore(state => state.setMentionQuery);
+  const setWaitingForReply = useAppStore(state => state.setWaitingForReply);
+  const sessionMode = useAppStore(state => state.sessionMode);
+  const setSessionMode = useAppStore(state => state.setSessionMode);
+  const cats = useAppStore(state => state.cats);
+  const setCats = useAppStore(state => state.setCats);
 
   const [mentionedCats, setMentionedCats] = useState<string[]>([]);
   const [showModeMenu, setShowModeMenu] = useState(false);
