@@ -44,7 +44,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = React.memo(({ message
     </div>
   );
 }, (prevProps, nextProps) => {
-  // 自定义比较函数：只有当 message.id 和 message.content 都相同时才认为相等
+  // 比较所有影响渲染的字段：id、content、type、sender
   return prevProps.message.id === nextProps.message.id &&
-         prevProps.message.content === nextProps.message.content;
+         prevProps.message.content === nextProps.message.content &&
+         prevProps.message.type === nextProps.message.type &&
+         prevProps.message.sender === nextProps.message.sender;
 });

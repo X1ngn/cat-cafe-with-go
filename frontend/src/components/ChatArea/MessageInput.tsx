@@ -9,7 +9,6 @@ export const MessageInput: React.FC = () => {
     currentSession,
     inputValue,
     setInputValue,
-    addMessage,
     showMentionMenu,
     setShowMentionMenu,
     setMentionQuery,
@@ -24,6 +23,7 @@ export const MessageInput: React.FC = () => {
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [availableModes, setAvailableModes] = useState<ModeInfo[]>([]);
   const [loadingMode, setLoadingMode] = useState(false);
+  const [isComposing, setIsComposing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const modeMenuRef = useRef<HTMLDivElement>(null);
 
@@ -37,7 +37,7 @@ export const MessageInput: React.FC = () => {
     const textarea = inputRef.current;
     if (textarea) {
       // 重置高度以获取正确的 scrollHeight
-      textarea.style.height = '24px';
+      textarea.style.height = 'auto';
       // 设置新高度，最大 200px
       const newHeight = Math.min(textarea.scrollHeight, 200);
       textarea.style.height = `${newHeight}px`;
@@ -112,9 +112,6 @@ export const MessageInput: React.FC = () => {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
-    console.log('=== handleInputChange ===');
-    console.log('新值:', value);
-    console.log('旧值:', inputValue);
     setInputValue(value);
 
     // 检测 @ 符号
@@ -144,65 +141,45 @@ export const MessageInput: React.FC = () => {
 
   // 从文本中解析实际提及的猫猫
   const parseMentionedCats = (text: string): string[] => {
-    console.log('=== parseMentionedCats 开始 ===');
-    console.log('输入文本:', text);
-    console.log('文本长度:', text.length);
-    console.log('文本字符码:', Array.from(text).map(c => `${c}(${c.charCodeAt(0)})`).join(' '));
-    console.log('可用猫猫列表:', cats);
-
     const mentionedCatIds: string[] = [];
 
     // 匹配所有 @猫猫名
     cats.forEach((cat) => {
-      // 使用更宽松的匹配，支持中文字符
       const regex = new RegExp(`@${cat.name}(?=\\s|$)`, 'g');
-      const matches = regex.test(text);
-      console.log(`测试 @${cat.name}:`, matches, '正则:', regex.source);
-      if (matches) {
-        console.log(`✓ 匹配成功，添加猫猫 ID:`, cat.id);
+      if (regex.test(text)) {
         mentionedCatIds.push(cat.id);
       }
     });
 
-    console.log('最终解析结果:', mentionedCatIds);
-    console.log('=== parseMentionedCats 结束 ===');
     return mentionedCatIds;
   };
 
   const handleSend = async () => {
     if (!inputValue.trim() || !currentSession) return;
 
-    console.log('=== handleSend 开始 ===');
-    console.log('当前输入值:', inputValue);
-
     try {
       // 从实际输入内容中解析 @ 提及的猫猫
       const actualMentionedCats = parseMentionedCats(inputValue);
 
-      console.log('准备发送消息:');
-      console.log('  - sessionId:', currentSession.id);
-      console.log('  - content:', inputValue);
-      console.log('  - mentionedCats:', actualMentionedCats);
-
-      const response = await messageAPI.sendMessage(
+      await messageAPI.sendMessage(
         currentSession.id,
         inputValue,
         actualMentionedCats
       );
       // 不再手动添加消息，等待 WebSocket 推送
-      // addMessage(response.data);
       setInputValue('');
       setMentionedCats([]);
 
       // 发送消息后，设置等待回复状态
       setWaitingForReply(true);
-      console.log('=== handleSend 完成 ===');
     } catch (error) {
       console.error('Failed to send message:', error);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // IME 输入法正在组合时不处理 Enter，避免中文选词时误发送
+    if (e.nativeEvent.isComposing || isComposing) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -280,7 +257,7 @@ export const MessageInput: React.FC = () => {
         </div>
 
         {/* 输入框容器 */}
-        <div className="flex-1 bg-white border border-gray-200 rounded-[32px] flex items-center px-6 py-3">
+        <div className="flex-1 bg-white border border-gray-200 rounded-[32px] flex items-start px-6 py-3">
           {/* 输入框 */}
           <textarea
             ref={inputRef}
@@ -288,8 +265,10 @@ export const MessageInput: React.FC = () => {
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onKeyUp={handleKeyUp}
+            onCompositionStart={() => setIsComposing(true)}
+            onCompositionEnd={() => setIsComposing(false)}
             placeholder="跟猫猫们说点什么... (@呼叫猫猫)"
-            className="flex-1 outline-none text-base resize-none overflow-y-auto"
+            className="flex-1 outline-none text-base resize-none overflow-y-auto leading-6 py-1"
             rows={1}
             style={{
               minHeight: '24px',
@@ -301,7 +280,7 @@ export const MessageInput: React.FC = () => {
           <button
             onClick={handleSend}
             disabled={!inputValue.trim()}
-            className="w-12 h-12 bg-primary rounded-full flex items-center justify-center hover:bg-opacity-90 transition-colors disabled:opacity-50 flex-shrink-0"
+            className="w-12 h-12 bg-primary rounded-full flex items-center justify-center hover:bg-opacity-90 transition-colors disabled:opacity-50 flex-shrink-0 ml-3"
           >
             <span className="text-2xl">🐾</span>
           </button>
