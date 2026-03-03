@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sort"
 	"sync"
 	"time"
 
@@ -399,28 +398,42 @@ func (sm *SessionManager) GetMessages(sessionID string) ([]Message, error) {
 		return nil, fmt.Errorf("会话不存在")
 	}
 
-	// 从 Session Chain 读取 user/cat 消息
-	messages := make([]Message, 0)
+	// 从 Session Chain 读取 user/cat 消息（已按 EventNo 有序）
+	chainMessages := make([]Message, 0)
 	if sm.chainManager != nil {
 		events, err := sm.chainManager.GetAllEvents(sessionID)
 		if err != nil {
 			LogWarn("[API] 从 Session Chain 读取消息失败: %v", err)
 		} else {
 			for _, ev := range events {
-				messages = append(messages, sm.eventToMessage(ev, sessionID))
+				chainMessages = append(chainMessages, sm.eventToMessage(ev, sessionID))
 			}
 		}
 	}
 
-	// 合并内存中的 system 消息
+	// 合并内存中的 system 消息：按时间戳插入到 chain 消息的正确位置
 	ctx.mu.RLock()
-	messages = append(messages, ctx.SystemMessages...)
+	systemMessages := make([]Message, len(ctx.SystemMessages))
+	copy(systemMessages, ctx.SystemMessages)
 	ctx.mu.RUnlock()
 
-	// 按时间排序
-	sort.Slice(messages, func(i, j int) bool {
-		return messages[i].Timestamp.Before(messages[j].Timestamp)
-	})
+	// chain 消息已按 EventNo 有序，无需再排序
+	// 将 system 消息按时间戳合并插入
+	messages := make([]Message, 0, len(chainMessages)+len(systemMessages))
+	si := 0
+	for _, cm := range chainMessages {
+		// 插入所有时间戳 <= 当前 chain 消息的 system 消息
+		for si < len(systemMessages) && !systemMessages[si].Timestamp.After(cm.Timestamp) {
+			messages = append(messages, systemMessages[si])
+			si++
+		}
+		messages = append(messages, cm)
+	}
+	// 追加剩余的 system 消息
+	for si < len(systemMessages) {
+		messages = append(messages, systemMessages[si])
+		si++
+	}
 
 	return messages, nil
 }
@@ -459,16 +472,14 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 	ctx.UpdatedAt = time.Now()
 	LogDebug("[API] 已添加用户消息: %s", userMsg.ID)
 
-	// 通过 WebSocket 推送新消息
-	sm.wsHub.BroadcastToSession(sessionID, "message", userMsg)
-
-	// 写入 Session Chain（用户消息）
+	// 写入 Session Chain（用户消息）—— 先写入再推送，避免竞争条件
 	if sm.chainManager != nil {
 		sm.chainManager.GetOrCreateChain(sessionID)
 		if err := sm.chainManager.AppendEvent(sessionID, SessionEvent{
 			Type:    SCEventUser,
 			Sender:  "user",
 			Content: req.Content,
+			MsgID:   userMsg.ID,
 		}); err != nil {
 			LogWarn("[API] 写入 Session Chain 失败: %v", err)
 		} else {
@@ -476,6 +487,9 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 			sm.pushChainStatus(sessionID)
 		}
 	}
+
+	// 通过 WebSocket 推送新消息
+	sm.wsHub.BroadcastToSession(sessionID, "message", userMsg)
 
 	// 自动保存会话
 	sm.AutoSaveSession(sessionID)
@@ -1348,22 +1362,23 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 
 	LogInfo("[API] ✓ Agent 消息已添加 - MessageID: %s, Agent: %s", agentMsg.ID, task.AgentName)
 
-	// 通过 WebSocket 推送猫猫消息
-	sm.wsHub.BroadcastToSession(task.SessionID, "message", agentMsg)
-
-	// 写入 Session Chain（Agent 回复）
+	// 写入 Session Chain（Agent 回复）—— 先写入再推送，避免竞争条件
 	if sm.chainManager != nil {
 		sm.chainManager.GetOrCreateChain(task.SessionID)
 		if err := sm.chainManager.AppendEvent(task.SessionID, SessionEvent{
 			Type:    SCEventCat,
 			Sender:  task.AgentName,
 			Content: task.Result,
+			MsgID:   agentMsg.ID,
 		}); err != nil {
 			LogWarn("[API] Agent 回复写入 Session Chain 失败: %v", err)
 		} else {
 			sm.pushChainStatus(task.SessionID)
 		}
 	}
+
+	// 通过 WebSocket 推送猫猫消息
+	sm.wsHub.BroadcastToSession(task.SessionID, "message", agentMsg)
 
 	// 更新调用历史中的 Response
 	sm.updateCallHistoryResponse(ctx, task.AgentName, task.Result)
@@ -1503,8 +1518,12 @@ func (sm *SessionManager) eventToMessage(ev SessionEvent, threadID string) Messa
 			Avatar: sm.config.User.Avatar,
 		}
 	}
+	msgID := ev.MsgID
+	if msgID == "" {
+		msgID = fmt.Sprintf("msg_ev_%d", ev.EventNo) // 兼容旧数据
+	}
 	return Message{
-		ID:        fmt.Sprintf("msg_ev_%d", ev.EventNo),
+		ID:        msgID,
 		Type:      msgType,
 		Content:   ev.Content,
 		Sender:    sender,

@@ -1,199 +1,164 @@
-# 前端对话消失 Bug 修复方案
+# 修复方案：前端对话消失 Bug
 
 ## 问题描述
 
-用户反馈前端对话消息会莫名其妙消失，但后端 Session Chain（`.md` 文件）中对话记录完整存在。
+用户发送消息后，前端对话列表经常莫名其妙消失。后台 Session Chain 文件（如 S001.md）中能看到完整的对话记录，但前端显示为空或消息丢失。
 
-**现象**：
-- 对话进行中，消息突然全部消失或部分消失
-- 刷新页面后消息恢复
-- 问题间歇性出现，不是每次都能复现
+## 根因分析
 
-**影响**：
-- 用户体验严重受损
-- 用户误以为消息丢失
+### 核心问题：消息 ID 不一致
 
-## 根本原因
+系统中存在两条消息路径，它们产生的消息 ID 格式完全不同：
 
-### 根因 1：useEffect 对象引用变化触发消息重置
+**路径 A：实时推送（WebSocket）**
 
-**文件**: `frontend/src/components/ChatArea/index.tsx` 第 22-53 行
+1. SendMessage() / handleResult() 生成 ID 格式为 msg_uuid前8位（如 msg_a1b2c3d4）
+2. 通过 WebSocket 推送给前端
+3. 前端通过 addMessageIfNotExists() 存入 zustand store
 
-```tsx
-useEffect(() => {
-  if (currentSession) {
-    messagesLoadedRef.current = false;
-    pendingWsMessagesRef.current = [];
-    loadMessages();  // 这里会先 setMessages(response.data) 清空再设置
-    // ...
-  }
-}, [currentSession]);  // ← 对象引用比较
-```
+**路径 B：API 重新加载**
 
-**问题**：
-- `useEffect` 依赖 `currentSession` 对象引用
-- `Sidebar` 中的 `updateSession` 会产生新的 session 对象引用（如会话名更新、消息数变化）
-- 新引用触发 `useEffect` 重新执行 → `loadMessages()` → 在 API 返回前消息列表被重置
-- 如果 API 请求失败或超时，消息永久消失
+1. 前端调用 GET /api/sessions/:id/messages
+2. 后端 GetMessages() 从 Session Chain 读取 events
+3. 调用 eventToMessage() 时重新生成 ID：fmt.Sprintf("msg_ev_%d", ev.EventNo)（如 msg_ev_1）
+4. 前端调用 setMessages(response.data) 全量覆盖消息列表
 
-### 根因 2：消息 ID 不一致导致去重失效
+| 场景 | WebSocket 推送的 ID | API 重新加载时的 ID | 结果 |
+|------|---------------------|---------------------|------|
+| 用户消息 | msg_a1b2c3d4 | msg_ev_1 | ID 不同 |
+| 猫猫回复 | msg_e5f6g7h8 | msg_ev_2 | ID 不同 |
 
-**文件**: `src/api_server.go`
+### 触发条件：组件频繁重新挂载
 
-- WebSocket 推送的用户消息 ID：`msg_{uuid[:8]}`（第 447 行）
-- Session Chain 读取的消息 ID：`msg_ev_{EventNo}`（第 1507 行）
-- 同一条消息在两个来源有不同的 ID
+从 api.log 中观察到，在 21 秒内（01:32:45 ~ 01:33:06），前端对同一个 session 发起了 3 次完整的重载周期（每次都包含 GET messages + GET ws + GET mode 等）。这说明 React 组件在频繁 unmount/remount，每次触发 ChatArea/index.tsx 的 useEffect，导致：
 
-**问题**：
-- `addMessageIfNotExists` 基于 ID 去重，不同 ID 会导致同一消息重复
-- `useEffect` 重触发时 `setMessages()` 用 Session Chain 版本覆盖，WS 推送的新消息（尚未写入 Chain）消失
+    loadMessages() -> setMessages(response.data) -> 全量覆盖 -> 消息消失
 
-### 根因 3：WebSocket 重连不重载消息
+### 三个加剧因素
 
-**文件**: `frontend/src/services/websocket.ts` 第 26-29 行
+#### 1. 写入与推送的时序竞争（Race Condition）
 
-```tsx
-connect(sessionId: string) {
-  if (this.ws && this.sessionId === sessionId) {
-    return; // 已连接到该会话 — 但断连重连后这里不会重新加载消息
-  }
-```
+SendMessage() 中的执行顺序（api_server.go:462-478）：
 
-**问题**：
-- WS 断开后，`scheduleReconnect` 调用 `createConnection` 重连
-- 重连成功后没有通知前端重新拉取消息
-- 断连期间的消息永久丢失（WS 没推送，前端也没主动拉取）
+    // 第 463 行：先通过 WebSocket 推送
+    sm.wsHub.BroadcastToSession(sessionID, "message", userMsg)
 
-## 解决方案
+    // 第 466-478 行：后写入 Session Chain
+    sm.chainManager.AppendEvent(sessionID, SessionEvent{...})
 
-### 修复 1：useEffect 依赖改为 session ID（字符串比较）
+如果前端在 WebSocket 推送之后、Session Chain 写入之前触发了 loadMessages()，API 返回的数据中不包含刚发送的消息，setMessages 全量覆盖后消息就消失了。
 
-**文件**: `frontend/src/components/ChatArea/index.tsx`
+#### 2. System 消息仅存内存
 
-将 `useEffect` 的依赖从 `currentSession` 对象改为 `currentSession?.id` 字符串：
+GetMessages() 中（api_server.go:415-418），System 消息（会话已创建、花花已加入对话等）只保存在 SessionContext.SystemMessages 内存中，不写入 Session Chain。服务重启后这些消息全部丢失。
 
-```tsx
-const currentSessionId = currentSession?.id;
+#### 3. setMessages 全量覆盖无合并策略
 
-useEffect(() => {
-  if (!currentSessionId) return;
+appStore.ts:63 中 setMessages 直接 set({ messages })，前端的 loadMessages()（ChatArea/index.tsx:70）直接用 API 返回值覆盖整个消息列表，没有与现有消息做合并。
 
-  messagesLoadedRef.current = false;
-  pendingWsMessagesRef.current = [];
+---
 
-  loadMessages(currentSessionId);
-  loadSessionMode(currentSessionId);
+## 修复方案
 
-  wsService.connect(currentSessionId);
+### 修改 1：SessionEvent 增加 MsgID 字段
 
-  const unsubscribeMessage = wsService.onMessage((message: Message) => {
-    if (!messagesLoadedRef.current) {
-      pendingWsMessagesRef.current.push(message);
-      return;
+**文件**: src/session_chain.go
+
+在 SessionEvent 结构体（第 58-66 行）中，在 Content 和 InvocationID 之间增加一个 MsgID 字段：
+
+    MsgID        string                `json:"msgId,omitempty"`  // 新增：原始消息 ID
+
+### 修改 2：写入 Session Chain 时携带原始 ID
+
+**文件**: src/api_server.go
+
+**2a. SendMessage() 中写入用户消息时传入 ID（约第 468 行）**
+
+在 AppendEvent 调用中新增 MsgID 字段：MsgID: userMsg.ID
+
+**2b. handleResult() 中写入猫猫回复时传入 ID（约第 1357 行）**
+
+在 AppendEvent 调用中新增 MsgID 字段：MsgID: agentMsg.ID
+
+### 修改 3：eventToMessage 优先使用原始 ID
+
+**文件**: src/api_server.go
+
+修改 eventToMessage() 方法（约第 1493-1514 行），优先使用 MsgID。
+
+原逻辑（第 1507 行）：
+
+    ID: fmt.Sprintf("msg_ev_%d", ev.EventNo)
+
+改为：
+
+    msgID := ev.MsgID
+    if msgID == "" {
+        msgID = fmt.Sprintf("msg_ev_%d", ev.EventNo)  // 兼容旧数据
     }
-    addMessageIfNotExists(message);
-    if (!isUserScrollingRef.current) {
-      requestAnimationFrame(() => {
-        messageListRef.current?.scrollToBottom();
-      });
-    }
-  });
+    ...
+    ID: msgID
 
-  return () => {
-    unsubscribeMessage();
-  };
-}, [currentSessionId]);
-```
+这样 API 返回的消息 ID 就与 WebSocket 推送的一致，前端 addMessageIfNotExists 的去重逻辑也能正确工作。
 
-**效果**：只有 session ID 真正变化时才重新加载，避免因对象引用变化导致的无意义重载。
+### 修改 4：调整写入与推送顺序，消除竞争条件
 
-### 修复 2：WebSocket 重连后通知前端重载消息
+**文件**: src/api_server.go
 
-**文件**: `frontend/src/services/websocket.ts`
+**4a. SendMessage() 中（约第 462-478 行）**
 
-添加重连成功回调机制：
+将 Session Chain 写入移到 WebSocket 推送之前：
 
-```tsx
-private reconnectHandlers: Set<() => void> = new Set();
+    原顺序：先 BroadcastToSession -> 后 AppendEvent
+    新顺序：先 AppendEvent -> 后 BroadcastToSession
 
-onReconnect(handler: () => void) {
-  this.reconnectHandlers.add(handler);
-  return () => this.reconnectHandlers.delete(handler);
-}
-```
+这样即使前端在收到 WS 推送后立即触发 loadMessages()，API 从 Session Chain 读取时也已包含该消息。
 
-在 `createConnection` 的 `onopen` 中，如果是重连（`reconnectAttempts > 0`），触发回调：
+**4b. handleResult() 中（约第 1351-1366 行）**
 
-```tsx
-this.ws.onopen = () => {
-  console.log('[WS] 连接已建立');
-  const wasReconnect = this.reconnectAttempts > 0;
-  this.reconnectAttempts = 0;
-  if (wasReconnect) {
-    this.reconnectHandlers.forEach(handler => handler());
-  }
-};
-```
+同样调整顺序：
 
-在 `ChatArea` 中订阅重连事件，重连后重新拉取消息：
+    原顺序：先 BroadcastToSession -> 后 AppendEvent
+    新顺序：先 AppendEvent -> 后 BroadcastToSession
 
-```tsx
-const unsubscribeReconnect = wsService.onReconnect(() => {
-  console.log('[ChatArea] WS reconnected, reloading messages');
-  loadMessages(currentSessionId);
-});
-```
+### 修改 5：Markdown 格式中保存 MsgID（可选但推荐）
 
-### 修复 3：统一消息 ID 生成策略（前端去重增强）
+**文件**: src/session_chain_storage.go
 
-**文件**: `frontend/src/stores/appStore.ts`
+在 writeSessionMarkdownToDisk 中，将 MsgID 写入 Markdown 标题行的 HTML 注释中（约第 167-175 行）。
 
-增强 `addMessageIfNotExists`，不仅按 ID 去重，还按内容 + 时间戳近似去重：
+例如原来的：
 
-```tsx
-addMessageIfNotExists: (message) => set((state) => {
-  // ID 精确去重
-  const existsById = state.messages.some(m => m.id === message.id);
-  if (existsById) return state;
+    ### #1 [12:30:00] **[用户]**
 
-  // 内容 + 时间近似去重（防止同一消息不同 ID 的情况）
-  const existsByContent = state.messages.some(m =>
-    m.content === message.content &&
-    m.type === message.type &&
-    m.sessionId === message.sessionId &&
-    Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp).getTime()) < 2000
-  );
-  if (existsByContent) return state;
+改为：
 
-  return { messages: [...state.messages, message] };
-}),
-```
+    ### #1 [12:30:00] **[用户]** <!-- msg_a1b2c3d4 -->
 
-## 修改文件清单
+同时更新 readSessionMarkdownFromDisk 的解析逻辑，从 HTML 注释中提取 MsgID。
+
+---
+
+## 涉及文件清单
 
 | 文件 | 修改内容 |
-|------|---------|
-| `frontend/src/components/ChatArea/index.tsx` | useEffect 依赖改为 sessionId；订阅 WS 重连事件 |
-| `frontend/src/services/websocket.ts` | 添加重连回调机制 |
-| `frontend/src/stores/appStore.ts` | 增强消息去重逻辑 |
+|------|----------|
+| src/session_chain.go:58-66 | SessionEvent 增加 MsgID 字段 |
+| src/api_server.go:462-478 | SendMessage() 调整写入顺序 + 传入 MsgID |
+| src/api_server.go:1337-1366 | handleResult() 调整写入顺序 + 传入 MsgID |
+| src/api_server.go:1493-1514 | eventToMessage() 优先使用 MsgID |
+| src/session_chain_storage.go:167-175 | Markdown 写入时保存 MsgID（可选） |
 
-## 测试建议
+## 验证方法
 
-### 手动测试
+1. 启动服务后，发送消息并 @猫猫
+2. 等待猫猫回复出现在前端
+3. 切换到其他会话再切回来，确认消息不消失
+4. 刷新浏览器（F5），确认消息完整保留
+5. 重启后端服务，确认消息完整保留（system 消息除外，后续可单独优化）
 
-1. **切换会话测试**：快速在多个会话之间切换，验证消息不会消失
-2. **网络中断测试**：在开发者工具中模拟网络断连，恢复后验证消息完整
-3. **长会话测试**：在长对话中发送消息，验证新消息正确显示
-4. **会话更新测试**：重命名会话后，验证消息不受影响
+## 备注
 
-### 验证方法
-
-1. 打开浏览器开发者工具 Console
-2. 观察 `[WS]` 和 `[ChatArea]` 开头的日志
-3. 确认没有出现意外的 `loadMessages` 调用
-4. 确认 WS 重连后有 `WS reconnected, reloading messages` 日志
-
-## 性能影响
-
-- `addMessageIfNotExists` 增加了内容比较，但消息列表通常不超过几百条，影响可忽略
-- `useEffect` 依赖优化反而减少了不必要的 API 调用，性能有所提升
+- 修改 1-4 为必须修改项，修改 5 为推荐项
+- 所有修改向后兼容：旧数据中 MsgID 为空时，自动回退到 msg_ev_N 格式
+- System 消息持久化为独立优化项，本次不涉及

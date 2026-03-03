@@ -60,6 +60,7 @@ type SessionEvent struct {
 	Type         SessionChainEventType `json:"type"`
 	Sender       string            `json:"sender"`
 	Content      string            `json:"content"`
+	MsgID        string            `json:"msgId,omitempty"`
 	InvocationID string            `json:"invocationId,omitempty"`
 	Timestamp    time.Time         `json:"timestamp"`
 	TokenCount   int               `json:"tokenCount"`
