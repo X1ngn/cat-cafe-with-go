@@ -54,6 +54,9 @@ frontend/.next/
 .env
 .env.local
 
+# MCP 配置（含本地路径和敏感信息，不应提交到仓库）
+mcp_config.json
+
 # 测试覆盖率
 coverage/
 *.cover
