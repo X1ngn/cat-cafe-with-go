@@ -10,56 +10,89 @@ import { Message } from '@/types';
 export const ChatArea: React.FC = () => {
   const currentSession = useAppStore(state => state.currentSession);
   const setMessages = useAppStore(state => state.setMessages);
+  const addMessageIfNotExists = useAppStore(state => state.addMessageIfNotExists);
   const sessionMode = useAppStore(state => state.sessionMode);
   const setSessionMode = useAppStore(state => state.setSessionMode);
   const messageListRef = useRef<MessageListHandle>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef<boolean>(false);
+  const messagesLoadedRef = useRef<boolean>(false);
+  const pendingWsMessagesRef = useRef<Message[]>([]);
+
+  // 使用 session ID 字符串作为依赖，避免对象引用变化触发无意义的重载
+  const currentSessionId = currentSession?.id;
 
   useEffect(() => {
-    if (currentSession) {
-      loadMessages();
-      loadSessionMode();
+    if (!currentSessionId) return;
 
-      wsService.connect(currentSession.id);
+    messagesLoadedRef.current = false;
+    pendingWsMessagesRef.current = [];
 
-      const unsubscribeMessage = wsService.onMessage((message: Message) => {
-        console.log('[ChatArea] received new message:', message);
-        const currentMessages = useAppStore.getState().messages;
-        const exists = currentMessages.some(m => m.id === message.id);
-        if (!exists) {
-          setMessages([...currentMessages, message]);
-          if (!isUserScrollingRef.current) {
-            requestAnimationFrame(() => {
-              messageListRef.current?.scrollToBottom();
-            });
-          }
-        }
-      });
+    loadMessages(currentSessionId);
+    loadSessionMode(currentSessionId);
 
-      return () => {
-        unsubscribeMessage();
-      };
-    }
-  }, [currentSession]);
+    wsService.connect(currentSessionId);
 
-  const loadMessages = async () => {
-    if (!currentSession) return;
+    const unsubscribeMessage = wsService.onMessage((message: Message) => {
+      console.log('[ChatArea] received new message:', message);
+
+      if (!messagesLoadedRef.current) {
+        pendingWsMessagesRef.current.push(message);
+        return;
+      }
+
+      addMessageIfNotExists(message);
+
+      if (!isUserScrollingRef.current) {
+        requestAnimationFrame(() => {
+          messageListRef.current?.scrollToBottom();
+        });
+      }
+    });
+
+    // 订阅 WS 重连事件，重连后重新拉取消息，避免断连期间消息丢失
+    const unsubscribeReconnect = wsService.onReconnect(() => {
+      console.log('[ChatArea] WS reconnected, reloading messages');
+      loadMessages(currentSessionId);
+    });
+
+    return () => {
+      unsubscribeMessage();
+      unsubscribeReconnect();
+    };
+  }, [currentSessionId]);
+
+  const loadMessages = async (sessionId?: string) => {
+    const targetSessionId = sessionId || currentSessionId;
+    if (!targetSessionId) return;
     try {
-      const response = await messageAPI.getMessages(currentSession.id);
+      const response = await messageAPI.getMessages(targetSessionId);
       setMessages(response.data);
+      messagesLoadedRef.current = true;
+
+      if (pendingWsMessagesRef.current.length > 0) {
+        const pending = pendingWsMessagesRef.current;
+        pendingWsMessagesRef.current = [];
+        pending.forEach(msg => addMessageIfNotExists(msg));
+      }
+
       requestAnimationFrame(() => {
         messageListRef.current?.scrollToBottom();
       });
     } catch (error) {
       console.error('Failed to load messages:', error);
+      messagesLoadedRef.current = true;
+      const pending = pendingWsMessagesRef.current;
+      pendingWsMessagesRef.current = [];
+      pending.forEach(msg => addMessageIfNotExists(msg));
     }
   };
 
-  const loadSessionMode = async () => {
-    if (!currentSession) return;
+  const loadSessionMode = async (sessionId?: string) => {
+    const targetSessionId = sessionId || currentSessionId;
+    if (!targetSessionId) return;
     try {
-      const response = await modeAPI.getSessionMode(currentSession.id);
+      const response = await modeAPI.getSessionMode(targetSessionId);
       setSessionMode(response.data);
     } catch (error) {
       console.error('Failed to load session mode:', error);

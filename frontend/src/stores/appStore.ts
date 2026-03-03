@@ -17,6 +17,7 @@ interface AppState {
   messages: Message[];
   setMessages: (messages: Message[]) => void;
   addMessage: (message: Message) => void;
+  addMessageIfNotExists: (message: Message) => void;
 
   // 猫猫列表
   cats: Cat[];
@@ -61,6 +62,22 @@ export const useAppStore = create<AppState>((set) => ({
   messages: [],
   setMessages: (messages) => set({ messages }),
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
+  addMessageIfNotExists: (message) => set((state) => {
+    // ID 精确去重
+    const existsById = state.messages.some(m => m.id === message.id);
+    if (existsById) return state;
+
+    // 内容 + 时间近似去重（防止同一消息因 WS 推送 ID 与 Session Chain ID 不同而重复）
+    const existsByContent = state.messages.some(m =>
+      m.content === message.content &&
+      m.type === message.type &&
+      m.sessionId === message.sessionId &&
+      Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp).getTime()) < 2000
+    );
+    if (existsByContent) return state;
+
+    return { messages: [...state.messages, message] };
+  }),
 
   cats: [],
   setCats: (cats) => set({ cats }),
