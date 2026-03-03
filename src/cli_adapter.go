@@ -30,6 +30,8 @@ func InvokeAgentWithMCP(cliType, prompt, aiSessionID, workDir, mcpConfigPath str
 }
 
 // getDefaultOptions 返回指定 CLI 类型的默认选项
+// 注意: claude 使用 bypassPermissions 是因为 agent 在受控的本地开发环境中运行，
+// 且已通过 AllowedTools 白名单限制了可用工具范围
 func getDefaultOptions(cliType string) AgentOptions {
 	switch cliType {
 	case "claude":
@@ -65,23 +67,29 @@ func GenerateMCPConfig(threadID, binPath, agentName string, hindsightCfg *Hindsi
 		}
 	}
 
-	// 从配置文件读取 MCP 服务器配置
+	// 安全: 所有 MCP server 配置均通过代码静态生成，不从仓库工作树读取，防止供应链攻击
 	servers := make(map[string]interface{})
 
-	// 读取 mcp_config.json
-	if data, err := os.ReadFile("mcp_config.json"); err == nil {
-		var config map[string]interface{}
-		if err := json.Unmarshal(data, &config); err == nil {
-			if mcpServers, ok := config["mcpServers"].(map[string]interface{}); ok {
-				// 复制配置文件中的 MCP 服务器
-				for k, v := range mcpServers {
-					servers[k] = v
-				}
-			}
+	// GitHub MCP server（通过环境变量获取 token）
+	if token := os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN"); token != "" {
+		servers["github"] = map[string]interface{}{
+			"command": "github-mcp-server",
+			"args":    []string{"stdio"},
+			"env": map[string]string{
+				"GITHUB_PERSONAL_ACCESS_TOKEN": token,
+			},
 		}
 	}
 
-	// 添加/覆盖 session-chain MCP 服务器（动态生成）
+	// Figma MCP server（通过环境变量获取 server 路径）
+	if figmaServerPath := os.Getenv("FIGMA_MCP_SERVER_PATH"); figmaServerPath != "" {
+		servers["figma"] = map[string]interface{}{
+			"command": "bun",
+			"args":    []string{figmaServerPath},
+		}
+	}
+
+	// session-chain MCP 服务器（动态生成）
 	servers["session-chain"] = map[string]interface{}{
 		"command": binPath,
 		"args":    []string{"--mode", "mcp", "--thread", threadID},
@@ -113,14 +121,14 @@ func GenerateMCPConfig(threadID, binPath, agentName string, hindsightCfg *Hindsi
 		return "", fmt.Errorf("序列化 MCP 配置失败: %w", err)
 	}
 
-	// 写入 logs 目录下的 mcp-config-logs 文件夹
-	mcpDir := "logs/mcp-config-logs"
-	if err := os.MkdirAll(mcpDir, 0755); err != nil {
-		return "", fmt.Errorf("创建 MCP 配置目录失败: %w", err)
+	// 安全: 使用系统临时目录存放配置文件，避免 token 等敏感信息落盘到仓库目录
+	mcpDir, err := os.MkdirTemp("", "cat-cafe-mcp-*")
+	if err != nil {
+		return "", fmt.Errorf("创建 MCP 临时配置目录失败: %w", err)
 	}
 
 	mcpFile := filepath.Join(mcpDir, fmt.Sprintf("mcp_%s.json", threadID))
-	if err := os.WriteFile(mcpFile, data, 0644); err != nil {
+	if err := os.WriteFile(mcpFile, data, 0600); err != nil {
 		return "", fmt.Errorf("写入 MCP 配置文件失败: %w", err)
 	}
 

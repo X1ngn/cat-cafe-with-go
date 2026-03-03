@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '@/stores/appStore';
-import { MessageBubble } from './MessageBubble';
+import { MessageList, MessageListHandle } from './MessageList';
 import { MessageInput } from './MessageInput';
 import ModeStatusBar from './ModeStatusBar';
 import { messageAPI, modeAPI } from '@/services/api';
@@ -8,77 +8,103 @@ import { wsService } from '@/services/websocket';
 import { Message } from '@/types';
 
 export const ChatArea: React.FC = () => {
-  const { currentSession, messages, setMessages, sessionMode, setSessionMode } = useAppStore();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentSession = useAppStore(state => state.currentSession);
+  const setMessages = useAppStore(state => state.setMessages);
+  const addMessageIfNotExists = useAppStore(state => state.addMessageIfNotExists);
+  const sessionMode = useAppStore(state => state.sessionMode);
+  const setSessionMode = useAppStore(state => state.setSessionMode);
+  const messageListRef = useRef<MessageListHandle>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrollingRef = useRef<boolean>(false);
+  const messagesLoadedRef = useRef<boolean>(false);
+  const pendingWsMessagesRef = useRef<Message[]>([]);
+
+  // 使用 session ID 字符串作为依赖，避免对象引用变化触发无意义的重载
+  const currentSessionId = currentSession?.id;
 
   useEffect(() => {
-    if (currentSession) {
-      loadMessages();
-      loadSessionMode();
+    if (!currentSessionId) return;
 
-      // 连接 WebSocket
-      wsService.connect(currentSession.id);
+    messagesLoadedRef.current = false;
+    pendingWsMessagesRef.current = [];
 
-      // 监听新消息
-      const unsubscribeMessage = wsService.onMessage((message: Message) => {
-        console.log('[ChatArea] 收到新消息:', message);
-        // 检查消息是否已存在，避免重复
-        const currentMessages = useAppStore.getState().messages;
-        const exists = currentMessages.some(m => m.id === message.id);
-        if (!exists) {
-          setMessages([...currentMessages, message]);
-        }
-      });
+    loadMessages(currentSessionId);
+    loadSessionMode(currentSessionId);
 
-      // 清理函数
-      return () => {
-        unsubscribeMessage();
-      };
-    }
-  }, [currentSession]);
+    wsService.connect(currentSessionId);
 
-  useEffect(() => {
-    // 只有在用户没有主动滚动时才自动滚动到底部
-    if (!isUserScrollingRef.current) {
-      scrollToBottom();
-    }
-  }, [messages]);
+    const unsubscribeMessage = wsService.onMessage((message: Message) => {
+      console.log('[ChatArea] received new message:', message);
 
-  const loadMessages = async () => {
-    if (!currentSession) return;
+      if (!messagesLoadedRef.current) {
+        pendingWsMessagesRef.current.push(message);
+        return;
+      }
+
+      addMessageIfNotExists(message);
+
+      if (!isUserScrollingRef.current) {
+        requestAnimationFrame(() => {
+          messageListRef.current?.scrollToBottom();
+        });
+      }
+    });
+
+    // 订阅 WS 重连事件，重连后重新拉取消息，避免断连期间消息丢失
+    const unsubscribeReconnect = wsService.onReconnect(() => {
+      console.log('[ChatArea] WS reconnected, reloading messages');
+      loadMessages(currentSessionId);
+    });
+
+    return () => {
+      unsubscribeMessage();
+      unsubscribeReconnect();
+    };
+  }, [currentSessionId]);
+
+  const loadMessages = async (sessionId?: string) => {
+    const targetSessionId = sessionId || currentSessionId;
+    if (!targetSessionId) return;
     try {
-      const response = await messageAPI.getMessages(currentSession.id);
+      const response = await messageAPI.getMessages(targetSessionId);
       setMessages(response.data);
+      messagesLoadedRef.current = true;
+
+      if (pendingWsMessagesRef.current.length > 0) {
+        const pending = pendingWsMessagesRef.current;
+        pendingWsMessagesRef.current = [];
+        pending.forEach(msg => addMessageIfNotExists(msg));
+      }
+
+      requestAnimationFrame(() => {
+        messageListRef.current?.scrollToBottom();
+      });
     } catch (error) {
       console.error('Failed to load messages:', error);
+      messagesLoadedRef.current = true;
+      const pending = pendingWsMessagesRef.current;
+      pendingWsMessagesRef.current = [];
+      pending.forEach(msg => addMessageIfNotExists(msg));
     }
   };
 
-  const loadSessionMode = async () => {
-    if (!currentSession) return;
+  const loadSessionMode = async (sessionId?: string) => {
+    const targetSessionId = sessionId || currentSessionId;
+    if (!targetSessionId) return;
     try {
-      const response = await modeAPI.getSessionMode(currentSession.id);
+      const response = await modeAPI.getSessionMode(targetSessionId);
       setSessionMode(response.data);
     } catch (error) {
       console.error('Failed to load session mode:', error);
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const handleScroll = () => {
+  const handleScroll = useCallback(() => {
     if (!messagesContainerRef.current) return;
-
     const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px 容差
-
-    // 如果用户不在底部，标记为正在滚动
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
     isUserScrollingRef.current = !isAtBottom;
-  };
+  }, []);
 
   if (!currentSession) {
     return (
@@ -90,7 +116,6 @@ export const ChatArea: React.FC = () => {
 
   return (
     <div className="flex-1 bg-white flex flex-col">
-      {/* 工作区信息栏 */}
       {currentSession.workspacePath && (
         <div className="px-8 pt-4 pb-2">
           <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">
@@ -103,26 +128,18 @@ export const ChatArea: React.FC = () => {
         </div>
       )}
 
-      {/* 模式状态栏 */}
       {sessionMode && (
         <div className="px-8 pt-2">
           <ModeStatusBar mode={sessionMode.mode} />
         </div>
       )}
 
-      {/* 消息列表 */}
-      <div
-        ref={messagesContainerRef}
+      <MessageList
+        ref={messageListRef}
+        containerRef={messagesContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-8 py-10 space-y-6"
-      >
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
-        <div ref={messagesEndRef} />
-      </div>
+      />
 
-      {/* 输入区域 */}
       <MessageInput />
     </div>
   );

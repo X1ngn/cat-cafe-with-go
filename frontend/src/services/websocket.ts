@@ -20,6 +20,7 @@ export class WebSocketService {
   private messageHandlers: Set<MessageHandler> = new Set();
   private historyHandlers: Set<HistoryHandler> = new Set();
   private chainStatusHandlers: Set<ChainStatusHandler> = new Set();
+  private reconnectHandlers: Set<() => void> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
 
@@ -49,7 +50,13 @@ export class WebSocketService {
 
       this.ws.onopen = () => {
         console.log('[WS] 连接已建立');
+        const wasReconnect = this.reconnectAttempts > 0;
         this.reconnectAttempts = 0;
+        // 重连成功后通知前端重新拉取消息，避免断连期间消息丢失
+        if (wasReconnect) {
+          console.log('[WS] 重连成功，通知前端重载消息');
+          this.reconnectHandlers.forEach(handler => handler());
+        }
       };
 
       this.ws.onmessage = (event) => {
@@ -126,6 +133,11 @@ export class WebSocketService {
   onChainStatus(handler: ChainStatusHandler) {
     this.chainStatusHandlers.add(handler);
     return () => this.chainStatusHandlers.delete(handler);
+  }
+
+  onReconnect(handler: () => void) {
+    this.reconnectHandlers.add(handler);
+    return () => this.reconnectHandlers.delete(handler);
   }
 
   disconnect() {

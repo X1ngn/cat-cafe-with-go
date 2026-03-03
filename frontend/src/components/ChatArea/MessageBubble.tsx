@@ -8,7 +8,7 @@ interface MessageBubbleProps {
   message: Message;
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+export const MessageBubble: React.FC<MessageBubbleProps> = React.memo(({ message }) => {
   if (message.type === 'system') {
     return (
       <div className="flex justify-center">
@@ -43,4 +43,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
       <Avatar color="#336699" size="md" className="rounded-xl" avatar={user?.avatar} />
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+  // 比较所有影响渲染的字段：id、content、type、sender
+  return prevProps.message.id === nextProps.message.id &&
+         prevProps.message.content === nextProps.message.content &&
+         prevProps.message.type === nextProps.message.type &&
+         prevProps.message.sender === nextProps.message.sender;
+});

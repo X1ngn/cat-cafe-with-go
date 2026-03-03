@@ -163,16 +163,20 @@ func (m *SessionChainManager) writeSessionMarkdownToDisk(threadID string, sessio
 
 	for _, e := range events {
 		ts := e.Timestamp.Format("15:04:05")
+		msgIDComment := ""
+		if e.MsgID != "" {
+			msgIDComment = fmt.Sprintf(" <!-- %s -->", e.MsgID)
+		}
 		switch e.Type {
 		case SCEventUser:
-			sb.WriteString(fmt.Sprintf("### #%d [%s] **[用户]**\n\n%s\n\n", e.EventNo, ts, e.Content))
+			sb.WriteString(fmt.Sprintf("### #%d [%s] **[用户]**%s\n\n%s\n\n", e.EventNo, ts, msgIDComment, e.Content))
 		case SCEventCat:
-			sb.WriteString(fmt.Sprintf("### #%d [%s] **[%s]**\n\n%s\n\n", e.EventNo, ts, e.Sender, e.Content))
+			sb.WriteString(fmt.Sprintf("### #%d [%s] **[%s]**%s\n\n%s\n\n", e.EventNo, ts, e.Sender, msgIDComment, e.Content))
 		case SCEventSystem:
-			sb.WriteString(fmt.Sprintf("### #%d [%s] **[系统]**\n\n%s\n\n", e.EventNo, ts, e.Content))
+			sb.WriteString(fmt.Sprintf("### #%d [%s] **[系统]**%s\n\n%s\n\n", e.EventNo, ts, msgIDComment, e.Content))
 		case SCEventInvocation:
-			sb.WriteString(fmt.Sprintf("### #%d [%s] **[调用:%s]** invocation_id=%s\n\n%s\n\n",
-				e.EventNo, ts, e.Sender, e.InvocationID, e.Content))
+			sb.WriteString(fmt.Sprintf("### #%d [%s] **[调用:%s]** invocation_id=%s%s\n\n%s\n\n",
+				e.EventNo, ts, e.Sender, e.InvocationID, msgIDComment, e.Content))
 		}
 	}
 
@@ -292,6 +296,14 @@ func parseEventsFromMarkdown(body string) []SessionEvent {
 				end := strings.Index(rest[start:], "]**")
 				if end > 0 {
 					e.Sender = rest[start : start+end]
+				}
+			}
+
+			// 提取 MsgID（从 HTML 注释 <!-- msg_xxx --> 中）
+			if idx := strings.Index(rest, "<!-- "); idx >= 0 {
+				endIdx := strings.Index(rest[idx:], " -->")
+				if endIdx > 0 {
+					e.MsgID = rest[idx+5 : idx+endIdx]
 				}
 			}
 
