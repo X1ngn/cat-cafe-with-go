@@ -1,6 +1,6 @@
 import { Message, CallHistory, SessionChainStatus } from '@/types';
 
-type WSMessageType = 'message' | 'history' | 'stats' | 'cats' | 'chain_status';
+type WSMessageType = 'message' | 'history' | 'stats' | 'cats' | 'chain_status' | 'session_updated';
 
 interface WSMessage {
   type: WSMessageType;
@@ -12,14 +12,16 @@ interface WSMessage {
 type MessageHandler = (message: Message) => void;
 type HistoryHandler = (history: CallHistory[]) => void;
 type ChainStatusHandler = (status: SessionChainStatus) => void;
+type SessionUpdatedHandler = (data: { id: string; summary: string; updatedAt: string; messageCount: number }) => void;
 
 export class WebSocketService {
   private ws: WebSocket | null = null;
   private sessionId: string | null = null;
-  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private messageHandlers: Set<MessageHandler> = new Set();
   private historyHandlers: Set<HistoryHandler> = new Set();
   private chainStatusHandlers: Set<ChainStatusHandler> = new Set();
+  private sessionUpdatedHandlers: Set<SessionUpdatedHandler> = new Set();
   private reconnectHandlers: Set<() => void> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
@@ -115,6 +117,9 @@ export class WebSocketService {
       case 'chain_status':
         this.chainStatusHandlers.forEach(handler => handler(wsMessage.data));
         break;
+      case 'session_updated':
+        this.sessionUpdatedHandlers.forEach(handler => handler(wsMessage.data));
+        break;
       default:
         console.warn('[WS] 未知消息类型:', wsMessage.type);
     }
@@ -133,6 +138,11 @@ export class WebSocketService {
   onChainStatus(handler: ChainStatusHandler) {
     this.chainStatusHandlers.add(handler);
     return () => this.chainStatusHandlers.delete(handler);
+  }
+
+  onSessionUpdated(handler: SessionUpdatedHandler) {
+    this.sessionUpdatedHandlers.add(handler);
+    return () => this.sessionUpdatedHandlers.delete(handler);
   }
 
   onReconnect(handler: () => void) {

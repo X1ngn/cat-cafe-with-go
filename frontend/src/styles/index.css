@@ -14,11 +14,11 @@
   }
 
   .cat-message {
-    @apply message-bubble bg-gray-100 text-black;
+    @apply message-bubble bg-gray-100 text-black overflow-hidden;
   }
 
   .user-message {
-    @apply message-bubble bg-user-green text-black;
+    @apply message-bubble bg-user-green text-black overflow-hidden;
   }
 
   .system-message {
@@ -72,14 +72,32 @@
 
   .prose code {
     @apply bg-gray-200 px-1.5 py-0.5 rounded text-sm font-mono;
+    word-break: break-all;
   }
 
   .prose pre {
-    @apply bg-gray-800 text-gray-100 p-4 rounded-lg overflow-x-auto my-3;
+    @apply bg-gray-800 text-gray-100 p-4 rounded-lg my-3;
+    max-width: 100%;
   }
 
   .prose pre code {
     @apply bg-transparent p-0 text-sm;
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  /* 代码块滚动容器 — 独立水平滚动条 */
+  .code-scroll-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  /* 让包裹在滚动容器内的 pre 不再需要自己的 overflow */
+  .code-scroll-wrapper > pre {
+    overflow: visible;
+    max-width: none;
   }
 
   .prose ul, .prose ol {
@@ -115,7 +133,22 @@
   }
 
   .prose table {
-    @apply w-full border-collapse my-3;
+    @apply border-collapse my-3 text-sm;
+  }
+
+  /* 表格滚动容器 — 独立水平滚动条 */
+  .table-scroll-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    @apply my-3;
+  }
+
+  /* 包裹在滚动容器内的表格不需要外边距 */
+  .table-scroll-wrapper > table {
+    @apply my-0;
+    width: max-content;   /* 按实际内容宽度展开，超出时触发滚动 */
+    min-width: 100%;      /* 内容不够宽时至少占满容器 */
   }
 
   .prose th, .prose td {

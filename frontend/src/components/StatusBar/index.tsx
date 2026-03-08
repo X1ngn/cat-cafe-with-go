@@ -69,7 +69,7 @@ export const StatusBar: React.FC = () => {
   };
 
   return (
-    <div className="w-[480px] h-screen bg-gray-50 overflow-y-auto p-6 space-y-6">
+    <div className="w-[480px] flex-shrink-0 h-screen bg-gray-50 overflow-y-auto p-6 space-y-6">
       {/* 猫猫状态区 */}
       <div className="bg-white border border-gray-200 rounded-xl p-6">
         <h2 className="text-lg font-bold mb-4">猫猫们的状态</h2>

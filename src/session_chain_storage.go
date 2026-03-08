@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,7 +163,7 @@ func (m *SessionChainManager) writeSessionMarkdownToDisk(threadID string, sessio
 	sb.WriteString("---\n\n")
 
 	for _, e := range events {
-		ts := e.Timestamp.Format("15:04:05")
+		ts := e.Timestamp.Format("2006-01-02 15:04:05")
 		msgIDComment := ""
 		if e.MsgID != "" {
 			msgIDComment = fmt.Sprintf(" <!-- %s -->", e.MsgID)
@@ -229,12 +230,18 @@ func (m *SessionChainManager) readSessionMarkdownFromDisk(threadID, sessionID st
 		}
 	}
 
-	events := parseEventsFromMarkdown(body)
+	events := parseEventsFromMarkdown(body, session.CreatedAt)
 	return session, events, nil
 }
 
 // parseEventsFromMarkdown 从 markdown body 解析 events
-func parseEventsFromMarkdown(body string) []SessionEvent {
+// baseDate 用于旧格式（仅 HH:MM:SS）的日期补全
+func parseEventsFromMarkdown(body string, baseDate time.Time) []SessionEvent {
+	// 防御：若 baseDate 为零值（createdAt 缺失/解析失败），兜底使用当前时间
+	if baseDate.IsZero() {
+		baseDate = time.Now()
+		log.Printf("[WARN] parseEventsFromMarkdown: baseDate 为零值，兜底使用 time.Now()")
+	}
 	var events []SessionEvent
 	lines := strings.Split(body, "\n")
 	var currentEvent *SessionEvent
@@ -266,9 +273,15 @@ func parseEventsFromMarkdown(body string) []SessionEvent {
 				endBracket := strings.Index(rest, "]")
 				if endBracket > 0 {
 					tsStr := rest[1:endBracket]
-					today := time.Now().Format("2006-01-02")
-					if t, err := time.Parse("2006-01-02 15:04:05", today+" "+tsStr); err == nil {
+					// 先尝试新格式（带日期）
+					if t, err := time.Parse("2006-01-02 15:04:05", tsStr); err == nil {
 						e.Timestamp = t
+					} else {
+						// 兼容旧格式（仅时间）— 使用 session 的 createdAt 日期而非 time.Now()
+						dateStr := baseDate.Format("2006-01-02")
+						if t, err := time.Parse("2006-01-02 15:04:05", dateStr+" "+tsStr); err == nil {
+							e.Timestamp = t
+						}
 					}
 					rest = strings.TrimSpace(rest[endBracket+1:])
 				}

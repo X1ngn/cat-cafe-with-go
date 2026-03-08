@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -15,6 +16,18 @@ import (
 	"github.com/gorilla/websocket"
 	"gopkg.in/yaml.v2"
 )
+
+// truncateSummary 按字符（rune）截断摘要，避免中文/emoji 截断乱码
+func truncateSummary(content string, prefix string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return fmt.Sprintf("%s：%s", prefix, content)
+	}
+	runes := []rune(content)
+	if len(runes) > maxRunes {
+		content = string(runes[:maxRunes]) + "..."
+	}
+	return fmt.Sprintf("%s：%s", prefix, content)
+}
 
 // SessionManager 管理所有会话
 type SessionManager struct {
@@ -359,6 +372,11 @@ func (sm *SessionManager) ListSessions() []Session {
 		})
 	}
 
+	// 按 UpdatedAt 降序排序（最新对话排在最前面）
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	})
+
 	return sessions
 }
 
@@ -470,6 +488,12 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 	}
 	ctx.MessageCount++
 	ctx.UpdatedAt = time.Now()
+
+	// 更新摘要为最新用户消息（每条消息都更新，使用 rune 截断）
+	if len(req.Content) > 0 {
+		ctx.Summary = truncateSummary(req.Content, "用户", 30)
+	}
+
 	LogDebug("[API] 已添加用户消息: %s", userMsg.ID)
 
 	// 写入 Session Chain（用户消息）—— 先写入再推送，避免竞争条件
@@ -493,6 +517,14 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 
 	// 自动保存会话
 	sm.AutoSaveSession(sessionID)
+
+	// 通过 WebSocket 全局广播 session 元数据更新（用于侧边栏实时刷新摘要和排序）
+	sm.wsHub.BroadcastToAll("session_updated", map[string]interface{}{
+		"id":           sessionID,
+		"summary":      ctx.Summary,
+		"updatedAt":    ctx.UpdatedAt,
+		"messageCount": ctx.MessageCount,
+	})
 
 	// 如果有提及的猫猫，通过编排器处理
 	if len(req.MentionedCats) > 0 {
@@ -567,15 +599,6 @@ func (sm *SessionManager) SendMessage(sessionID string, req SendMessageRequest) 
 				}
 			}(call)
 		}
-	}
-
-	// 更新摘要
-	if ctx.Summary == "" && len(req.Content) > 0 {
-		summary := req.Content
-		if len(summary) > 30 {
-			summary = summary[:30] + "..."
-		}
-		ctx.Summary = fmt.Sprintf("用户：%s", summary)
 	}
 
 	LogInfo("[API] 消息发送完成 - MessageID: %s", userMsg.ID)
@@ -1360,6 +1383,9 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 	ctx.MessageCount++
 	ctx.UpdatedAt = time.Now()
 
+	// 更新摘要为最新猫猫回复（在 AutoSaveSession 之前）
+	ctx.Summary = truncateSummary(task.Result, task.AgentName, 30)
+
 	LogInfo("[API] ✓ Agent 消息已添加 - MessageID: %s, Agent: %s", agentMsg.ID, task.AgentName)
 
 	// 写入 Session Chain（Agent 回复）—— 先写入再推送，避免竞争条件
@@ -1388,6 +1414,14 @@ func (sm *SessionManager) handleResult(message redis.XMessage) error {
 
 	// 自动保存会话
 	sm.AutoSaveSession(task.SessionID)
+
+	// 通过 WebSocket 全局广播 session 元数据更新（用于侧边栏实时刷新摘要和排序）
+	sm.wsHub.BroadcastToAll("session_updated", map[string]interface{}{
+		"id":           task.SessionID,
+		"summary":      ctx.Summary,
+		"updatedAt":    ctx.UpdatedAt,
+		"messageCount": ctx.MessageCount,
+	})
 
 	// 通过编排器处理猫猫回复，获取下一步需要调用的猫猫
 	calls, err := sm.orchestrator.HandleAgentResponse(task.SessionID, task.AgentName, task.Result)
