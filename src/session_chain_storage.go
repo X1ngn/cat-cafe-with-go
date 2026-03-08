@@ -273,13 +273,14 @@ func parseEventsFromMarkdown(body string, baseDate time.Time) []SessionEvent {
 				endBracket := strings.Index(rest, "]")
 				if endBracket > 0 {
 					tsStr := rest[1:endBracket]
-					// 先尝试新格式（带日期）
-					if t, err := time.Parse("2006-01-02 15:04:05", tsStr); err == nil {
+					// 先尝试新格式（带日期）— 使用 ParseInLocation 确保解析为本地时间
+					// 修复：time.Parse 会返回 UTC，但写入时用的是本地时间，导致重启后时间偏移
+					if t, err := time.ParseInLocation("2006-01-02 15:04:05", tsStr, time.Local); err == nil {
 						e.Timestamp = t
 					} else {
 						// 兼容旧格式（仅时间）— 使用 session 的 createdAt 日期而非 time.Now()
 						dateStr := baseDate.Format("2006-01-02")
-						if t, err := time.Parse("2006-01-02 15:04:05", dateStr+" "+tsStr); err == nil {
+						if t, err := time.ParseInLocation("2006-01-02 15:04:05", dateStr+" "+tsStr, time.Local); err == nil {
 							e.Timestamp = t
 						}
 					}
