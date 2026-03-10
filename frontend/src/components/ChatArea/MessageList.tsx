@@ -34,7 +34,7 @@ export const MessageList = React.memo(forwardRef<MessageListHandle, {
     <div
       ref={containerRef}
       onScroll={onScroll}
-      className="flex-1 overflow-y-auto px-8 py-10 space-y-6"
+      className="flex-1 overflow-y-auto overflow-x-hidden px-8 py-10 space-y-6"
     >
       {renderedMessages}
       <div ref={messagesEndRef} />

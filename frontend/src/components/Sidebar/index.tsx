@@ -87,9 +87,11 @@ export const Sidebar: React.FC = () => {
       await sessionAPI.deleteSession(sessionId);
       removeSession(sessionId);
 
-      // 如果删除的是当前会话，切换到第一个会话
+      // 如果删除的是当前会话，切换到排序后的第一个会话（与侧边栏排序一致）
       if (currentSession?.id === sessionId) {
-        const remainingSessions = sessions.filter(s => s.id !== sessionId);
+        const remainingSessions = sessions
+          .filter(s => s.id !== sessionId)
+          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
         if (remainingSessions.length > 0) {
           setCurrentSession(remainingSessions[0]);
         } else {
@@ -102,21 +104,26 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  // 筛选 sessions
+  // 筛选并排序 sessions
   const filteredSessions = useMemo(() => {
-    if (!searchQuery.trim()) {
-      return sessions;
+    let result = sessions;
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(session =>
+        session.name.toLowerCase().includes(query) ||
+        (session.summary && session.summary.toLowerCase().includes(query))
+      );
     }
 
-    const query = searchQuery.toLowerCase();
-    return sessions.filter(session =>
-      session.name.toLowerCase().includes(query) ||
-      (session.summary && session.summary.toLowerCase().includes(query))
-    );
+    // 按 updatedAt 降序排序（最新对话排在最前面）
+    return [...result].sort((a, b) => {
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
   }, [sessions, searchQuery]);
 
   return (
-    <div className="w-[280px] h-screen bg-white border-r border-gray-200 flex flex-col">
+    <div className="w-[280px] flex-shrink-0 h-screen bg-white border-r border-gray-200 flex flex-col">
       {/* Logo */}
       <div className="p-6">
         <h1 className="text-2xl font-bold">猫猫咖啡屋</h1>

@@ -101,6 +101,30 @@ func (h *WSHub) BroadcastToSession(sessionID string, msgType string, data interf
 	h.broadcast <- message
 }
 
+// BroadcastToAll 向所有已连接的客户端广播消息（不分 session）
+// 仅用于 session_updated 等全局元数据通知，载荷小、频率低
+// TODO: 如果未来支持多用户/多租户，需要改为按用户/租户作用域广播，
+// 避免会话摘要跨用户泄露。当前为单用户场景，全局广播是安全的。
+func (h *WSHub) BroadcastToAll(msgType string, data interface{}) {
+	message := WSMessage{
+		Type:      msgType,
+		Data:      data,
+		Timestamp: time.Now(),
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for _, clients := range h.clients {
+		for client := range clients {
+			select {
+			case client.send <- message:
+			default:
+				// 缓冲区满，跳过（不在读锁中删除 client，避免死锁）
+			}
+		}
+	}
+}
+
 // writePump 处理向客户端写入消息
 func (c *WSClient) writePump() {
 	ticker := time.NewTicker(54 * time.Second)

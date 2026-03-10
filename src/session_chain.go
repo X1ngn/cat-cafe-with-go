@@ -290,6 +290,35 @@ func (m *SessionChainManager) AppendEvent(threadID string, event SessionEvent) e
 	return m.writeMetaToDisk(threadID, meta)
 }
 
+// GetLastUserOrCatEvent 获取指定 thread 中最后一条用户或猫猫消息（跳过 system / invocation）
+// 用于在服务启动时从 Session Chain 重建 Summary
+func (m *SessionChainManager) GetLastUserOrCatEvent(threadID string) *SessionEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	meta, ok := m.metas[threadID]
+	if !ok {
+		return nil
+	}
+
+	// 从最新的 session 往前找
+	for seq := meta.SessionCount; seq >= 1; seq-- {
+		sid := sessionIDFromSeq(seq)
+		evts, ok := m.events[threadID][sid]
+		if !ok || len(evts) == 0 {
+			continue
+		}
+		// 从最后一条事件往前找
+		for i := len(evts) - 1; i >= 0; i-- {
+			if evts[i].Type == SCEventUser || evts[i].Type == SCEventCat {
+				result := evts[i]
+				return &result
+			}
+		}
+	}
+	return nil
+}
+
 // RecordInvocation 记录一次 Agent 调用
 func (m *SessionChainManager) RecordInvocation(threadID string, inv InvocationRecord) error {
 	m.mu.Lock()

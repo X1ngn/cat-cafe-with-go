@@ -108,14 +108,14 @@ export const ChatArea: React.FC = () => {
 
   if (!currentSession) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-white">
+      <div className="flex-1 min-w-0 flex items-center justify-center bg-white">
         <p className="text-gray-400 text-lg">选择或创建一个会话开始聊天</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 bg-white flex flex-col">
+    <div className="flex-1 min-w-0 bg-white flex flex-col">
       {currentSession.workspacePath && (
         <div className="px-8 pt-4 pb-2">
           <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2">

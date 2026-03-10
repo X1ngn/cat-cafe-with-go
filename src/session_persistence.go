@@ -156,7 +156,70 @@ func (sm *SessionManager) LoadAllSessions() error {
 	}
 
 	LogInfo("[Persistence] 成功加载 %d/%d 个会话", successCount, len(sessionIDs))
+
+	// 从 Session Chain 重建 Summary（修复旧 session 摘要停留在第一条消息的问题）
+	sm.rebuildSummariesFromChain()
+
 	return nil
+}
+
+// rebuildSummariesFromChain 从 Session Chain 中读取每个 session 最后一条消息，重建 Summary
+// 解决问题：旧代码时期保存的 session 在 Redis 中的 summary 只保留了第一条用户消息
+func (sm *SessionManager) rebuildSummariesFromChain() {
+	if sm.chainManager == nil {
+		return
+	}
+
+	sm.mu.RLock()
+	sessionIDs := make([]string, 0, len(sm.sessions))
+	for sid := range sm.sessions {
+		sessionIDs = append(sessionIDs, sid)
+	}
+	sm.mu.RUnlock()
+
+	updatedCount := 0
+	for _, sessionID := range sessionIDs {
+		lastEvent := sm.chainManager.GetLastUserOrCatEvent(sessionID)
+		if lastEvent == nil {
+			continue
+		}
+
+		sm.mu.RLock()
+		ctx, exists := sm.sessions[sessionID]
+		sm.mu.RUnlock()
+		if !exists {
+			continue
+		}
+
+		// 确定 sender 前缀
+		prefix := "用户"
+		if lastEvent.Type == SCEventCat {
+			prefix = lastEvent.Sender
+		}
+
+		newSummary := truncateSummary(lastEvent.Content, prefix, 30)
+
+		ctx.mu.Lock()
+		oldSummary := ctx.Summary
+		if oldSummary != newSummary {
+			ctx.Summary = newSummary
+			// 同时更新 UpdatedAt 为最后一条消息的时间（如果比 Redis 中的更新）
+			if !lastEvent.Timestamp.IsZero() && lastEvent.Timestamp.After(ctx.UpdatedAt) {
+				ctx.UpdatedAt = lastEvent.Timestamp
+			}
+			updatedCount++
+			LogDebug("[Persistence] 重建摘要 %s: %q -> %q", sessionID, oldSummary, newSummary)
+		}
+		ctx.mu.Unlock()
+	}
+
+	if updatedCount > 0 {
+		LogInfo("[Persistence] 从 Session Chain 重建了 %d 个会话的摘要", updatedCount)
+		// 将修复后的 summary 异步回写 Redis，确保下次重启不需要再重建
+		for _, sessionID := range sessionIDs {
+			sm.AutoSaveSession(sessionID)
+		}
+	}
 }
 
 // DeleteSessionFromRedis 从 Redis 删除会话
