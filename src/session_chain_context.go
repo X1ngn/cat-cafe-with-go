@@ -42,7 +42,7 @@ func (w *AgentWorker) buildOrchestratedPrompt(task *TaskMessage) string {
 	summaries := w.collectSealedSummaries(threadID)
 
 	// 格式化
-	history := formatEventsAsHistory(events)
+	history := formatEventsAsHistory(events, 0)
 
 	var sb strings.Builder
 	sb.WriteString(w.systemPrompt)
@@ -113,7 +113,7 @@ func (w *AgentWorker) buildCLIManagedPrompt(task *TaskMessage) (string, string) 
 			if summaries != "" {
 				aiSessionID = "" // 强制新建 session
 				// 构建包含 summary 的 prompt
-				history := formatEventsAsHistory(incrementalEvents)
+				history := formatEventsAsHistory(incrementalEvents, 0)
 				var sb strings.Builder
 				sb.WriteString(w.systemPrompt)
 				sb.WriteString("\n\n========================================\n\n")
@@ -136,7 +136,7 @@ func (w *AgentWorker) buildCLIManagedPrompt(task *TaskMessage) (string, string) 
 	}
 
 	// 构建增量 prompt
-	history := formatEventsAsHistory(incrementalEvents)
+	history := formatEventsAsHistory(incrementalEvents, 0)
 
 	var sb strings.Builder
 	if aiSessionID == "" {
@@ -219,12 +219,19 @@ func (w *AgentWorker) collectSummariesAfter(threadID, afterSessionID string) str
 }
 
 // formatEventsAsHistory 将 Event 列表格式化为对话历史文本
-func formatEventsAsHistory(events []SessionEvent) string {
+// maxLen <= 0 表示不截断（默认行为），maxLen > 0 时截断超长内容
+func formatEventsAsHistory(events []SessionEvent, maxLen int) string {
 	if len(events) == 0 {
 		return ""
 	}
 
-	const maxContentLen = 500
+	truncate := func(s string) string {
+		if maxLen > 0 && len(s) > maxLen {
+			return s[:maxLen] + "...(已截断)"
+		}
+		return s
+	}
+
 	var sb strings.Builder
 
 	for _, e := range events {
@@ -233,18 +240,11 @@ func formatEventsAsHistory(events []SessionEvent) string {
 		case SCEventUser:
 			sb.WriteString(fmt.Sprintf("[用户] %s\n", content))
 		case SCEventCat:
-			if len(content) > maxContentLen {
-				content = content[:maxContentLen] + "...(已截断)"
-			}
-			sb.WriteString(fmt.Sprintf("[%s] %s\n", e.Sender, content))
+			sb.WriteString(fmt.Sprintf("[%s] %s\n", e.Sender, truncate(content)))
 		case SCEventSystem:
 			sb.WriteString(fmt.Sprintf("[系统] %s\n", content))
 		case SCEventInvocation:
-			// 简化 invocation 信息
-			if len(content) > maxContentLen {
-				content = content[:maxContentLen] + "...(已截断)"
-			}
-			sb.WriteString(fmt.Sprintf("[%s:调用] %s\n", e.Sender, content))
+			sb.WriteString(fmt.Sprintf("[%s:调用] %s\n", e.Sender, truncate(content)))
 		}
 	}
 
